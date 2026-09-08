@@ -1,0 +1,58 @@
+name: Build p3-esp DLLs
+
+on:
+  push:
+    branches: [prod]
+    paths:
+      - '**.rs'
+      - '**/Cargo.toml'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [prod]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: dll-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: dll-
+
+      - name: Build
+        shell: cmd
+        run: cargo build --release --target i686-pc-windows-msvc
+
+      - name: Assemble output
+        shell: cmd
+        run: |
+          if exist output rmdir /s /q output
+          mkdir output\mods
+          copy /Y target\i686-pc-windows-msvc\release\p3_esp_modloader.dll output\
+          copy /Y target\i686-pc-windows-msvc\release\p3_esp_dll_patcher.exe output\
+          copy /Y target\i686-pc-windows-msvc\release\mod_catedral_crash.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_fundacion.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_fullhd.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_limite_ciudades.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_mendigos_taberna.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_refresco_misiones.dll output\mods\
+          copy /Y target\i686-pc-windows-msvc\release\mod_satisfaccion_mendigos.dll output\mods\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3-esp-dlls
+          path: output/

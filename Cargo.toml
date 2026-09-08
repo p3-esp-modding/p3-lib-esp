@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "p3-esp-modloader",
+    "p3-esp-modlib",
+    "mod-catedral-crash",
+    "mod-fundacion",
+    "mod-fullhd",
+    "mod-limite-ciudades",
+    "mod-mendigos-taberna",
+    "mod-refresco-misiones",
+    "mod-satisfaccion-mendigos",
+    "p3-esp-dll-patcher",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = "s"

@@ -1,0 +1,8 @@
+[package]
+name = "p3-esp-dll-patcher"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "p3_esp_dll_patcher"
+path = "src/main.rs"

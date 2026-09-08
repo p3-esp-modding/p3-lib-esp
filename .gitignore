@@ -1,0 +1,28 @@
+# Binarios del juego (NUNCA subir)
+Patrician3*.exe
+Patrician3*.bak
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+
+# Rust
+target/
+output/
+output_gnu/
+**/Cargo.lock
+
+# Configuracion local
+config.json
+
+# Docker (imagenes no se versionan)
+*.tar
+*.tar.gz
+
+# OS
+.DS_Store
+Thumbs.db
+
+p3-lib
+p3-lib/*
