@@ -212,24 +212,33 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
     }
     let cave_addr = cave as u32;
     let p = cave as *mut u8;
-    let mut n = 0usize;
 
-    let mut push = |bytes: &[u8]| {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(n), bytes.len());
-        n += bytes.len();
-    };
+    struct Cave {
+        p: *mut u8,
+        n: usize,
+    }
+    impl Cave {
+        fn push(&mut self, bytes: &[u8]) {
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.p.add(self.n), bytes.len()) };
+            self.n += bytes.len();
+        }
+        fn len(&self) -> usize {
+            self.n
+        }
+    }
+    let mut c = Cave { p, n: 0 };
 
     if acortar {
         // Solo reescribir la fecha del caso "fundar ciudad" (tipo == 0):
         //   cmp dword [esp+0x50],0 ; jne +14 ; mov eax,[0x701B34] ;
         //   add eax,delta ; mov [esp+0x4C],eax
-        push(&[0x83, 0x7C, 0x24, 0x50, 0x00]); // cmp dword [esp+0x50],0
-        push(&[0x75, 0x0E]); // jne +14 (salta el bloque de reescritura)
-        push(&[0xA1]); // mov eax,[0x00701B34]
-        push(&WORLD_TIME_ADDR.to_le_bytes());
-        push(&[0x05]); // add eax, delta
-        push(&delta.to_le_bytes());
-        push(&[0x89, 0x44, 0x24, 0x4C]); // mov [esp+0x4C],eax  (fecha)
+        c.push(&[0x83, 0x7C, 0x24, 0x50, 0x00]); // cmp dword [esp+0x50],0
+        c.push(&[0x75, 0x0E]); // jne +14 (salta el bloque de reescritura)
+        c.push(&[0xA1]); // mov eax,[0x00701B34]
+        c.push(&WORLD_TIME_ADDR.to_le_bytes());
+        c.push(&[0x05]); // add eax, delta
+        c.push(&delta.to_le_bytes());
+        c.push(&[0x89, 0x44, 0x24, 0x4C]); // mov [esp+0x4C],eax  (fecha)
     }
 
     // logger(due, tipo, mask, town) - stdcall RET 16; args en orden inverso.
@@ -237,24 +246,25 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
     //   town=[esp+0x58] mask=[esp+0x54] tipo=[esp+0x50] due=[esp+0x4C]
     // Cada push desplaza ESP 4 abajo, asi que siempre toca [esp+0x58].
     for _ in 0..4 {
-        push(&[0xFF, 0x74, 0x24, 0x58]); // push dword [esp+0x58]
+        c.push(&[0xFF, 0x74, 0x24, 0x58]); // push dword [esp+0x58]
     }
 
     // call p3esp_mision_log (rel32)
     let logger = p3esp_mision_log as usize as u32;
-    push(&[0xE8]);
-    let rel_call = logger.wrapping_sub(cave_addr + n as u32 + 5);
-    push(&rel_call.to_le_bytes());
+    c.push(&[0xE8]);
+    let rel_call = logger.wrapping_sub(cave_addr + c.len() as u32 + 5);
+    c.push(&rel_call.to_le_bytes());
 
     // Bytes originales desplazados: LEA ECX,[esp+0x4C] + PUSH 0x10
-    push(&[0x8D, 0x4C, 0x24, 0x4C]);
-    push(&[0x6A, 0x10]);
+    c.push(&[0x8D, 0x4C, 0x24, 0x4C]);
+    c.push(&[0x6A, 0x10]);
 
     // jmp 0x005341BA (rel32)
-    push(&[0xE9]);
-    let rel_jmp = HOOK_CONT.wrapping_sub(cave_addr + n as u32 + 5);
-    push(&rel_jmp.to_le_bytes());
+    c.push(&[0xE9]);
+    let rel_jmp = HOOK_CONT.wrapping_sub(cave_addr + c.len() as u32 + 5);
+    c.push(&rel_jmp.to_le_bytes());
 
+    let n = c.len();
     if n != size {
         log_error("mod-refresco-misiones: tamano de cave desajustado (bug interno)");
         return false;
