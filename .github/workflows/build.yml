@@ -51,8 +51,25 @@ jobs:
           copy /Y target\i686-pc-windows-msvc\release\mod_refresco_misiones.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_satisfaccion_mendigos.dll output\mods\
 
+      - name: Zip output
+        shell: cmd
+        run: |
+          powershell -NoProfile -Command "Compress-Archive -Path output\* -DestinationPath p3-esp-dlls.zip -Force"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: p3-esp-dlls
           path: output/
+
+      - name: Create / update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly build (prod)
+          prerelease: true
+          files: |
+            p3-esp-dlls.zip
+            output/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

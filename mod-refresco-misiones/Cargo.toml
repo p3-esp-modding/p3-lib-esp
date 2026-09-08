@@ -8,3 +8,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 p3-esp-modlib = { path = "../p3-esp-modlib" }
+
+[dependencies.windows]
+version = "0.48"
+features = [
+    "Win32_System_Memory",
+]
