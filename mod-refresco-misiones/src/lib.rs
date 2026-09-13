@@ -251,8 +251,8 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
 
     // call p3esp_mision_log (rel32)
     let logger = p3esp_mision_log as usize as u32;
-    c.push(&[0xE8]);
     let rel_call = logger.wrapping_sub(cave_addr + c.len() as u32 + 5);
+    c.push(&[0xE8]);
     c.push(&rel_call.to_le_bytes());
 
     // Bytes originales desplazados: LEA ECX,[esp+0x4C] + PUSH 0x10
@@ -260,8 +260,8 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
     c.push(&[0x6A, 0x10]);
 
     // jmp 0x005341BA (rel32)
-    c.push(&[0xE9]);
     let rel_jmp = HOOK_CONT.wrapping_sub(cave_addr + c.len() as u32 + 5);
+    c.push(&[0xE9]);
     c.push(&rel_jmp.to_le_bytes());
 
     let n = c.len();
