@@ -2,13 +2,13 @@ name: Build p3-esp DLLs
 
 on:
   push:
-    branches: [prod]
+    branches: [pre-release, stable]
     paths:
       - '**.rs'
       - '**/Cargo.toml'
       - '.github/workflows/build.yml'
   pull_request:
-    branches: [prod]
+    branches: [pre-release, stable]
   workflow_dispatch:
 
 jobs:
@@ -19,6 +19,8 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -65,12 +67,34 @@ jobs:
           name: p3-esp-dlls
           path: output/
 
-      - name: Create / update release
+      - name: Move floating tag to this commit
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          git tag -f "$TAG" "${{ github.sha }}"
+          git push -f origin "refs/tags/$TAG"
+
+      - name: Create / update pre-release
+        if: github.event_name == 'push' && github.ref_name == 'pre-release'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly
-          name: Nightly build (prod)
+          tag_name: pre-release
+          name: Pre-release build
           prerelease: true
+          make_latest: false
+          files: |
+            p3-esp-dlls.zip
+            output/**
+
+      - name: Create / update stable release
+        if: github.event_name == 'push' && github.ref_name == 'stable'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: stable
+          name: Stable build
+          prerelease: false
+          make_latest: true
           files: |
             p3-esp-dlls.zip
             output/**
