@@ -1,93 +1,104 @@
-# p3-esp
+# p3-lib-esp — Mods para Patrician 3 (español)
 
+Mods en forma de DLL para el **Patrician 3 español**. Corrigen bugs y añaden
+mejoras sin modificar el ejecutable original: los cambios se aplican en memoria
+cada vez que arranca el juego, así que tus partidas guardadas no se tocan.
 
+Basado en el diseño del [modloader de la comunidad inglesa](https://github.com/P3Modding/p3-lib).
 
-## Getting started
+## Descarga
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Ve a la pestaña [**Releases**](https://github.com/p3-esp-modding/p3-lib-esp/releases)
+y descarga del release **`stable`**:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+- **`p3-esp-dlls.zip`** — los mods.
+- **`p3_esp_mods.cfg`** — la configuración.
 
-## Add your files
+Si sale una versión nueva, vuelve a descargar ambos: el zip se extrae igual,
+pero el `p3_esp_mods.cfg` **no lo sobrescribas** si ya lo tienes configurado a
+tu gusto (compara primero por si hay opciones nuevas).
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Instalación
 
+Requisito: el juego original español instalado (vale la versión de Steam o CD).
+
+1. **Haz una copia de seguridad** de tu `Patrician3.exe` (por ejemplo,
+   renómbralo a `Patrician3_original.exe` en la misma carpeta).
+2. Extrae el contenido de `p3-esp-dlls.zip` en la **carpeta del juego** (donde
+   está `Patrician3.exe`). El zip ya trae la estructura correcta:
+   `p3_esp_modloader.dll` y `p3_esp_dll_patcher.exe` en la raíz, y los
+   `mod_*.dll` dentro de `mods\`. Si hay algún mod que no quieras usar, borra
+   su DLL.
+3. Si aún no tienes `p3_esp_mods.cfg` en la carpeta del juego, cópialo ahí.
+   Si ya lo tienes de una instalación anterior, déjalo como esté
+   (ver [Configuración](#configuración)).
+4. **Inicia** `p3_esp_dll_patcher.exe` (en la carpeta del juego).
+   Se abre una ventana que dice qué ha hecho y espera una tecla para cerrarse:
+   - Si hay un `Patrician3_original.exe` al lado, regenera `Patrician3.exe`
+     parcheado a partir de él.
+   - Si no, genera `Patrician3_modloader.exe` a partir de `Patrician3.exe`
+     (el original no se toca).
+5. Juega con el ejecutable parcheado (`Patrician3.exe` o
+   `Patrician3_modloader.exe` según el caso). No hace falta repetir el paso 4
+   salvo que cambies de ejecutable o actualices el modloader.
+
+Los mods escriben su actividad en `Patrician3_modloader.log` (carpeta del
+juego). Si algo falla al arrancar, míralo ahí primero.
+
+> **Importante:** el parcheador solo funciona con el ejecutable español
+> original del juego. Si tu `Patrician3.exe` ya venía modificado (por ejemplo,
+> con el parche FullHD de la comunidad), el parcheador lo detectará y no lo
+> tocará; en ese caso, recupera tu copia de seguridad
+> (`Patrician3_original.exe`, paso 1) y parchea a partir de ella.
+
+## Mods incluidos
+
+| DLL | Qué hace |
+|-----|----------|
+| `mod_fullhd.dll` | Resolución 1920×1080 (antes 1280 / 1024×768). |
+| `mod_limite_ciudades.dll` | La misión del gobernador permite fundar hasta 36 ciudades (antes 26). |
+| `mod_mendigos_taberna.dll` | La taberna acepta hasta 100 marineros (antes 50). |
+| `mod_satisfaccion_mendigos.dll` | Ajusta la satisfacción de los mendigos (4 → 3). |
+| `mod_fundacion.dll` | Ciudad fundada: corrige los 3 productos más escasos (antes salían mal por un error del juego) y opcionalmente da 4 productos o una lista personalizada. Ver `[fundacion]` abajo. |
+| `mod_refresco_misiones.dll` | Observa las misiones del gobernador y las registra en `misiones_log.txt`. Opción experimental de acortar plazos (ver `[misiones]`). |
+| `mod_catedral_crash.dll` | Corrige el crash al abrir la catedral tras recargar partida (tabla de texturas no reinicializada). |
+
+## Configuración
+
+El fichero `p3_esp_mods.cfg` (en la carpeta del juego) controla los mods que
+lo necesitan. Ejemplo:
+
+```ini
+[fundacion]
+# Qué produce la ciudad que fundas como regidor:
+#   modo=1  los 3 productos más escasos de la Hansa (juego original, corregido)
+#   modo=2  igual, pero 4 productos en vez de 3
+#   modo=3  TÚ eliges los productos (lista "productos" abajo)
+modo=2
+productos=grano,madera,cerveza,vino,miel
+
+[misiones]
+#   modo=loguear  (RECOMENDADO) solo registra en misiones_log.txt, no cambia nada.
+#   modo=acortar  EXPERIMENTAL: reescribe la fecha de la misión de fundar ciudad.
+modo=loguear
+fundarCiudadMeses=3
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/marcant94/p3-esp.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
+Productos válidos para `modo=3`: grano, madera, cerveza, vino, miel, pescado,
+carne, cuero, pieles, tela, sal, hierro, herramientas, lana, brea, cáñamo,
+alfarería, ladrillos, aceite. Nota: carne y cuero comparten fábrica; poner los
+dos cuenta como uno.
 
-* [Set up project integrations](https://gitlab.com/marcant94/p3-esp/-/settings/integrations)
+## Nota para desarrolladores
 
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+- Ramas: `main` (desarrollo), `pre-release` (compilaciones de prueba) y
+  `stable` (última versión buena). Cada push a `pre-release`/`stable` compila
+  en GitHub Actions y actualiza el release homónimo automáticamente.
+- Compilación local en Windows: `deploy.bat` (MSVC,
+  `i686-pc-windows-msvc`) genera `output\`.
+- Tras tocar cualquier cave o parche, ejecutar `python3 verificar_mods.py
+  Patrician3.exe`: reconstruye los bytes de cada cave, los desensambla con
+  objdump y comprueba los parches contra el exe original.
+- Detalles técnicos (direcciones del exe español, análisis de misiones):
+  `docs/DIRECCIONES_EXE_ESPANOL.md`, `docs/analisis_mision_fundar_ciudad.md`
+  y `AGENTS.md`.
