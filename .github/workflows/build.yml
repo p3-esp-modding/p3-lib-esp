@@ -86,7 +86,7 @@ jobs:
           make_latest: false
           files: |
             p3-esp-dlls.zip
-            output/**
+            p3_esp_mods.cfg
 
       - name: Create / update stable release
         if: github.event_name == 'push' && github.ref_name == 'stable'
@@ -98,4 +98,4 @@ jobs:
           make_latest: true
           files: |
             p3-esp-dlls.zip
-            output/**
+            p3_esp_mods.cfg
