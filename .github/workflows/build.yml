@@ -68,34 +68,51 @@ jobs:
           name: p3-esp-dlls
           path: output/
 
-      - name: Move floating tag to this commit
+      - name: Compute dated tag
         if: github.event_name == 'push'
+        id: tag
         shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
-          git tag -f "$TAG" "${{ github.sha }}"
-          git push -f origin "refs/tags/$TAG"
+          STAMP=$(date -u +%Y%m%d-%H%M)
+          echo "value=${{ github.ref_name }}-${STAMP}" >> "$GITHUB_OUTPUT"
 
-      - name: Create / update pre-release
+      - name: Create pre-release
         if: github.event_name == 'push' && github.ref_name == 'pre-release'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: pre-release
-          name: Pre-release build
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: Pre-release ${{ steps.tag.outputs.value }}
           prerelease: true
           make_latest: false
           files: |
             p3-esp-dlls.zip
             p3_esp_mods.cfg
 
-      - name: Create / update stable release
+      - name: Create stable release
         if: github.event_name == 'push' && github.ref_name == 'stable'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: stable
-          name: Stable build
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: Stable ${{ steps.tag.outputs.value }}
           prerelease: false
           make_latest: true
           files: |
             p3-esp-dlls.zip
             p3_esp_mods.cfg
+
+      - name: Prune old releases (keep 8 per branch)
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="${{ github.ref_name }}-"
+          mapfile -t TAGS < <(gh release list --limit 100 --json tagName \
+            --jq ".[] | select(.tagName | startswith(\"$PREFIX\")) | .tagName" | sort -r)
+          i=0
+          for t in "${TAGS[@]}"; do
+            i=$((i+1))
+            if [ "$i" -gt 8 ]; then
+              gh release delete "$t" --cleanup-tag --yes
+            fi
+          done
