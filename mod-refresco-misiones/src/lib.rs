@@ -77,6 +77,7 @@ use windows::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ,
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
 };
+use windows::Win32::System::SystemInformation::GetLocalTime;
 
 const IMAGE_BASE: u32 = 0x00400000;
 
@@ -90,10 +91,22 @@ const HOOK_CONT: u32 = 0x005341BA;
 const WORLD_TIME_ADDR: u32 = 0x00701B34;
 const TICKS_PER_YEAR: u32 = 93440;
 const TICKS_PER_DAY: u32 = 256;
+/// Gestor de scheduled tasks (ingles: 0x006DD73C). Layout (comunidad):
+///   +0x00 *tasks (cabeza de la lista enlazada de scheduled_task)
+///   +0x08 u16 earliest index, +0x0C u16 tasks_size, +0x2C mision pendiente.
+/// scheduled_task (0x18 bytes): +0 due u32, +4 next u16, +6 opcode u16,
+/// +8 datos (16 bytes). Opcode 0x85 = mision de almirantazgo, con el payload
+/// AldermanMissionPtr: +0 due, +4 tipo (0xFF00+caso), +5 merchant 0xFF,
+/// +6 reschedule_counter, +8 mascara u32, +0xC ciudad u8, +0xD nombre, +0xE 0xFF.
+const TASK_MGR_ADDR: u32 = 0x00702970;
+const TASK_OPCODE_MISION: u16 = 0x85;
+const TASK_SIZE: usize = 0x18;
+const MAX_TASKS_DUMP: usize = 512;
 
-/// Tamanos de cave: loguear = 32 bytes; acortar = 53 bytes.
+/// Tamanos de cave: loguear = 32 bytes; acortar = 55 bytes
+/// (bloque de reescritura: 7+2+5+5+4 = 23 en vez de 21).
 const CAVE_SIZE_LOG: usize = 32;
-const CAVE_SIZE_ACORTAR: usize = 53;
+const CAVE_SIZE_ACORTAR: usize = 55;
 
 unsafe fn hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK_RVA) as *const u8, 5) == HOOK_EXPECTED
@@ -175,23 +188,91 @@ fn fecha(ticks: u32) -> (u32, u32) {
     (ticks / TICKS_PER_YEAR, (ticks % TICKS_PER_YEAR) / TICKS_PER_DAY)
 }
 
+/// Hora real del PC como "AAAA-MM-DD HH:MM:SS" (para ordenar el log por
+/// sesion: cada vez que se abre el ayuntamiento salta una rafaga de lineas).
+fn hora_real() -> String {
+    unsafe {
+        let mut st = std::mem::zeroed();
+        GetLocalTime(&mut st);
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
+        )
+    }
+}
+
+/// Vuelca las tareas vivas de opcode 0x85 (misiones de almirantazgo) del
+/// gestor 0x702970. Se llama DESPUES de que el generador registre las suyas,
+/// asi que muestra el estado completo: que hay, con que fecha/ciudad/mascara.
+/// Solo lee memoria del juego; no modifica nada.
+unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
+    let head = *(TASK_MGR_ADDR as *const u32);
+    if head == 0 {
+        let _ = writeln!(f, "[{}] gestor: sin tareas", ts);
+        return;
+    }
+    let mut idx = 0usize;
+    let mut n = 0usize;
+    // La lista es un array con indices next; el primero es el de menor due.
+    // Recorremos desde el indice earliest hasta agotar o llegar al tope.
+    let earliest = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
+    idx = earliest;
+    while n < MAX_TASKS_DUMP {
+        let t = (head as usize + idx * TASK_SIZE) as *const u8;
+        let due = std::ptr::read_unaligned(t as *const u32);
+        let next = std::ptr::read_unaligned(t.add(4) as *const u16) as usize;
+        let opcode = std::ptr::read_unaligned(t.add(6) as *const u16);
+        if opcode == TASK_OPCODE_MISION {
+            let d = t.add(8);
+            let mtipo = std::ptr::read_unaligned(d.add(4) as *const u16);
+            let recont = *d.add(6);
+            let mmask = std::ptr::read_unaligned(d.add(8) as *const u32);
+            let mciudad = *d.add(0xC);
+            let (va, vd) = fecha(due);
+            let _ = writeln!(
+                f,
+                "[{}] viva tipo={} mascara=0x{:08X} ciudad={} recont={} \
+                 fecha=(anio {}, dia {})",
+                ts, mtipo, mmask, mciudad, recont, va, vd
+            );
+        }
+        n += 1;
+        if next == 0xFFFF {
+            break;
+        }
+        idx = next;
+    }
+}
+
 /// Llamada desde la cave con (due, tipo, mascara, ciudad).
 /// stdcall: RET 16 limpia los 4 args empujados por la cave.
+/// Solo loguea la mision de FUNDAR (tipo 0xFF00); las demas se ignoran.
+/// Tras loguearla vuelca el estado del gestor (misiones vivas).
 #[no_mangle]
 pub unsafe extern "stdcall" fn p3esp_mision_log(due: u32, tipo: u32, mask: u32, town: u32) {
+    // 0xFF00 = fundar ciudad. Los demas casos (0xFF01..0xFF04) no interesan.
+    if tipo != 0xFF00 {
+        return;
+    }
+    let ts = hora_real();
     let now = *(WORLD_TIME_ADDR as *const u32);
     let (ya, yd) = fecha(now);
     let (va, vd) = fecha(due);
     let gap = due.wrapping_sub(now) / TICKS_PER_DAY;
-    let linea = format!(
-        "tipo={} mascara=0x{:08X} ciudad={} generado_en=(anio {}, dia {}) \
-         fecha_mision=(anio {}, dia {}) delta_dias={}\n",
-        tipo, mask, town, ya, yd, va, vd, gap
-    );
+    let ciudad = (town & 0xFF) as u8;
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("misiones_log.txt") {
-        let _ = f.write_all(linea.as_bytes());
+        let _ = writeln!(
+            f,
+            "[{}] fundar mascara=0x{:08X} ciudad={} generado_en=(anio {}, dia {}) \
+             fecha_mision=(anio {}, dia {}) delta_dias={}",
+            ts, mask, ciudad, ya, yd, va, vd, gap
+        );
+        volcar_gestor(&mut f, &ts);
     }
-    log_info(&format!("mod-refresco-misiones: {}", linea.trim_end()));
+    log_info(&format!(
+        "mod-refresco-misiones: [{}] fundar ciudad={} mascara=0x{:08X} delta_dias={}",
+        ts, ciudad, mask, gap
+    ));
 }
 
 // ---------- cave ----------
@@ -229,11 +310,13 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
     let mut c = Cave { p, n: 0 };
 
     if acortar {
-        // Solo reescribir la fecha del caso "fundar ciudad" (tipo == 0):
-        //   cmp dword [esp+0x50],0 ; jne +14 ; mov eax,[0x701B34] ;
+        // Solo reescribir la fecha del caso "fundar ciudad" (tipo == 0xFF00):
+        //   cmp word [esp+0x50],0xFF00 ; jne +17 ; mov eax,[0x701B34] ;
         //   add eax,delta ; mov [esp+0x4C],eax
-        c.push(&[0x83, 0x7C, 0x24, 0x50, 0x00]); // cmp dword [esp+0x50],0
-        c.push(&[0x75, 0x0E]); // jne +14 (salta el bloque de reescritura)
+        // (OJO: el tipo real es 0xFF00+caso, no 0..4; el antiguo cmp contra 0
+        //  nunca coincidia y el modo acortar era un no-op.)
+        c.push(&[0x66, 0x81, 0x7C, 0x24, 0x50, 0x00, 0xFF]); // cmp word [esp+0x50],0xFF00
+        c.push(&[0x75, 0x11]); // jne +17 (salta el bloque de reescritura)
         c.push(&[0xA1]); // mov eax,[0x00701B34]
         c.push(&WORLD_TIME_ADDR.to_le_bytes());
         c.push(&[0x05]); // add eax, delta

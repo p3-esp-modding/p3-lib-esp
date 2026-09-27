@@ -13,4 +13,5 @@ p3-esp-modlib = { path = "../p3-esp-modlib" }
 version = "0.48"
 features = [
     "Win32_System_Memory",
+    "Win32_System_SystemInformation",
 ]
