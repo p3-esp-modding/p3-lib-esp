@@ -192,8 +192,7 @@ fn fecha(ticks: u32) -> (u32, u32) {
 /// sesion: cada vez que se abre el ayuntamiento salta una rafaga de lineas).
 fn hora_real() -> String {
     unsafe {
-        let mut st = std::mem::zeroed();
-        GetLocalTime(&mut st);
+        let st = GetLocalTime();
         format!(
             "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
@@ -211,12 +210,10 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
         let _ = writeln!(f, "[{}] gestor: sin tareas", ts);
         return;
     }
-    let mut idx = 0usize;
     let mut n = 0usize;
     // La lista es un array con indices next; el primero es el de menor due.
     // Recorremos desde el indice earliest hasta agotar o llegar al tope.
-    let earliest = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
-    idx = earliest;
+    let mut idx = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
     while n < MAX_TASKS_DUMP {
         let t = (head as usize + idx * TASK_SIZE) as *const u8;
         let due = std::ptr::read_unaligned(t as *const u32);
