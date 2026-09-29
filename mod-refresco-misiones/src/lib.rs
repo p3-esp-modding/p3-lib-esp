@@ -200,6 +200,36 @@ fn hora_real() -> String {
     }
 }
 
+/// Nombre de ciudad por indice (mapeo de la UI de fundar, comunidad inglesa).
+const CIUDADES: [&str; 40] = [
+    "Edimburgo", "Newcastle", "Scarborough", "Boston", "Londres", "Brujas", // 0-5
+    "Haarlem", "Harlingen", "Groninga", "Colonia", "Bremen", "Ribe", // 6-11
+    "Hamburgo", "Flensburgo", "Lubeck", "Rostock", // 12-15
+    "Bergen", "Stavanger", "Tonsberg", "Oslo", "Aalborg", "Gotemburgo", // 16-21
+    "Naestved", "Malmo", "Ahus", "Estocolmo", "Visby", "Helsinki", // 22-27
+    "Stettin", "Ruegenwald", "Gdansk", "Torun", "Konigsberg", "Memel", // 28-33
+    "Windau", "Riga", "Pernau", "Reval", "Ladoga", "Novgorod", // 34-39
+];
+
+fn nombre_ciudad(idx: u8) -> &'static str {
+    CIUDADES.get(idx as usize).copied().unwrap_or("?")
+}
+
+/// DIAGNOSTICO TEMPORAL: vuelca los primeros 64 bytes crudos del gestor
+/// 0x702970 en hex para descubrir su layout real en el exe espanol.
+/// Solo lee; no modifica nada.
+unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
+    let base = TASK_MGR_ADDR as *const u8;
+    let mut hex = String::with_capacity(64 * 3);
+    for i in 0..64usize {
+        if i % 16 == 0 {
+            hex.push_str(&format!("\n[{ts}] gestor+{:02X}:", i));
+        }
+        hex.push_str(&format!(" {:02X}", *base.add(i)));
+    }
+    let _ = writeln!(f, "[{ts}] diag{}", hex);
+}
+
 /// Vuelca las tareas vivas de opcode 0x85 (misiones de almirantazgo) del
 /// gestor 0x702970. Se llama DESPUES de que el generador registre las suyas,
 /// asi que muestra el estado completo: que hay, con que fecha/ciudad/mascara.
@@ -278,15 +308,16 @@ pub unsafe extern "stdcall" fn p3esp_mision_log(due: u32, tipo: u32, mask: u32, 
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("misiones_log.txt") {
         let _ = writeln!(
             f,
-            "[{}] fundar mascara=0x{:08X} ciudad={} generado_en=(anio {}, dia {}) \
+            "[{}] fundar mascara=0x{:08X} ciudad={}({}) generado_en=(anio {}, dia {}) \
              fecha_mision=(anio {}, dia {}) delta_dias={}",
-            ts, mask, ciudad, ya, yd, va, vd, gap
+            ts, mask, ciudad, nombre_ciudad(ciudad), ya, yd, va, vd, gap
         );
+        diag_gestor(&mut f, &ts);
         volcar_gestor(&mut f, &ts);
     }
     log_info(&format!(
-        "mod-refresco-misiones: [{}] fundar ciudad={} mascara=0x{:08X} delta_dias={}",
-        ts, ciudad, mask, gap
+        "mod-refresco-misiones: [{}] fundar ciudad={}({}) mascara=0x{:08X} delta_dias={}",
+        ts, ciudad, nombre_ciudad(ciudad), mask, gap
     ));
 }
 
