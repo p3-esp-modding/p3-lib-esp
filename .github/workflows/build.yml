@@ -3,10 +3,6 @@ name: Build p3-esp DLLs
 on:
   push:
     branches: [pre-release, stable]
-    paths:
-      - '**.rs'
-      - '**/Cargo.toml'
-      - '.github/workflows/build.yml'
   pull_request:
     branches: [pre-release, stable]
   workflow_dispatch:
