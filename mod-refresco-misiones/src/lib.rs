@@ -204,18 +204,33 @@ fn hora_real() -> String {
 /// gestor 0x702970. Se llama DESPUES de que el generador registre las suyas,
 /// asi que muestra el estado completo: que hay, con que fecha/ciudad/mascara.
 /// Solo lee memoria del juego; no modifica nada.
+///
+/// BLINDAJE: el generador tambien corre al cargar partida, cuando el gestor
+/// puede no estar inicializado ([0x702970] = basura como 0x12, que NO es 0 y
+/// pasa un check de nulidad -> page fault al leer [0x16]). Por eso se valida
+/// que head parezca un puntero real, que size/earliest/next esten en rango, y
+/// ante cualquier valor raro se aborta el volcado sin leer.
 unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
-    let head = *(TASK_MGR_ADDR as *const u32);
-    if head == 0 {
-        let _ = writeln!(f, "[{}] gestor: sin tareas", ts);
+    let head = *(TASK_MGR_ADDR as *const u32) as usize;
+    if head < 0x10000 {
+        let _ = writeln!(f, "[{}] gestor: no disponible", ts);
+        return;
+    }
+    let size = *((TASK_MGR_ADDR + 0x0C) as *const u16) as usize;
+    if size == 0 || size > MAX_TASKS_DUMP {
+        let _ = writeln!(f, "[{}] gestor: tamano raro ({})", ts, size);
+        return;
+    }
+    let mut idx = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
+    if idx >= size {
+        let _ = writeln!(f, "[{}] gestor: earliest fuera de rango", ts);
         return;
     }
     let mut n = 0usize;
     // La lista es un array con indices next; el primero es el de menor due.
     // Recorremos desde el indice earliest hasta agotar o llegar al tope.
-    let mut idx = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
-    while n < MAX_TASKS_DUMP {
-        let t = (head as usize + idx * TASK_SIZE) as *const u8;
+    while n < size {
+        let t = (head + idx * TASK_SIZE) as *const u8;
         let due = std::ptr::read_unaligned(t as *const u32);
         let next = std::ptr::read_unaligned(t.add(4) as *const u16) as usize;
         let opcode = std::ptr::read_unaligned(t.add(6) as *const u16);
@@ -235,6 +250,9 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
         }
         n += 1;
         if next == 0xFFFF {
+            break;
+        }
+        if next >= size {
             break;
         }
         idx = next;
