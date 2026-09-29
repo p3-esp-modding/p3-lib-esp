@@ -215,13 +215,13 @@ fn nombre_ciudad(idx: u8) -> &'static str {
     CIUDADES.get(idx as usize).copied().unwrap_or("?")
 }
 
-/// DIAGNOSTICO TEMPORAL: vuelca los primeros 64 bytes crudos del gestor
+/// DIAGNOSTICO TEMPORAL: vuelca los primeros 128 bytes crudos del gestor
 /// 0x702970 en hex para descubrir su layout real en el exe espanol.
 /// Solo lee; no modifica nada.
 unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
     let base = TASK_MGR_ADDR as *const u8;
-    let mut hex = String::with_capacity(64 * 3);
-    for i in 0..64usize {
+    let mut hex = String::with_capacity(128 * 3);
+    for i in 0..128usize {
         if i % 16 == 0 {
             hex.push_str(&format!("\n[{ts}] gestor+{:02X}:", i));
         }
@@ -241,30 +241,26 @@ unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
 /// que head parezca un puntero real, que size/earliest/next esten en rango, y
 /// ante cualquier valor raro se aborta el volcado sin leer.
 unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
-    let head = *(TASK_MGR_ADDR as *const u32) as usize;
-    if head < 0x10000 {
+    // Layout espanol (deducido del diag): +0x00 estado/flags (0x12, 0x4...),
+    // +0x08 puntero al array de tareas, +0x2C.. sentinela 0xFFFFFFFF.
+    // El struct ingles (field_0_tasks en +0x00) NO cuadra aqui.
+    let estado = *(TASK_MGR_ADDR as *const u32);
+    let arr = *(TASK_MGR_ADDR + 8) as *const u32 as usize;
+    if arr < 0x10000 {
         let _ = writeln!(f, "[{}] gestor: no disponible", ts);
         return;
     }
-    let size = *((TASK_MGR_ADDR + 0x0C) as *const u16) as usize;
-    if size == 0 || size > MAX_TASKS_DUMP {
-        let _ = writeln!(f, "[{}] gestor: tamano raro ({})", ts, size);
-        return;
-    }
-    let mut idx = *((TASK_MGR_ADDR + 8) as *const u16) as usize;
-    if idx >= size {
-        let _ = writeln!(f, "[{}] gestor: earliest fuera de rango", ts);
-        return;
-    }
-    let mut n = 0usize;
-    // La lista es un array con indices next; el primero es el de menor due.
-    // Recorremos desde el indice earliest hasta agotar o llegar al tope.
-    while n < size {
-        let t = (head + idx * TASK_SIZE) as *const u8;
+    // Recorremos las primeras 32 entradas de 0x18 bytes y logueamos las de
+    // opcode 0x85. Si el stride real no es 0x18, el diag lo revelara.
+    const ENTRADAS: usize = 32;
+    let mut vivas = 0usize;
+    for i in 0..ENTRADAS {
+        let t = (arr + i * TASK_SIZE) as *const u8;
         let due = std::ptr::read_unaligned(t as *const u32);
         let next = std::ptr::read_unaligned(t.add(4) as *const u16) as usize;
         let opcode = std::ptr::read_unaligned(t.add(6) as *const u16);
         if opcode == TASK_OPCODE_MISION {
+            vivas += 1;
             let d = t.add(8);
             let mtipo = std::ptr::read_unaligned(d.add(4) as *const u16);
             let recont = *d.add(6);
@@ -273,20 +269,13 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
             let (va, vd) = fecha(due);
             let _ = writeln!(
                 f,
-                "[{}] viva tipo={} mascara=0x{:08X} ciudad={} recont={} \
-                 fecha=(anio {}, dia {})",
-                ts, mtipo, mmask, mciudad, recont, va, vd
+                "[{}] viva[{}] tipo={} mascara=0x{:08X} ciudad={}({}) recont={} \
+                 fecha=(anio {}, dia {}) next={:#x}",
+                ts, i, mtipo, mmask, mciudad, nombre_ciudad(mciudad), recont, va, vd, next
             );
         }
-        n += 1;
-        if next == 0xFFFF {
-            break;
-        }
-        if next >= size {
-            break;
-        }
-        idx = next;
     }
+    let _ = writeln!(f, "[{}] gestor: {} misiones vivas (estado={:#x})", ts, vivas, estado);
 }
 
 /// Llamada desde la cave con (due, tipo, mascara, ciudad).
