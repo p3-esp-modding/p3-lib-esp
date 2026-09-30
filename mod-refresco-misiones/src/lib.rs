@@ -245,7 +245,7 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
     // +0x08 puntero al array de tareas, +0x2C.. sentinela 0xFFFFFFFF.
     // El struct ingles (field_0_tasks en +0x00) NO cuadra aqui.
     let estado = *(TASK_MGR_ADDR as *const u32);
-    let arr = *(TASK_MGR_ADDR + 8) as *const u32 as usize;
+    let arr = *((TASK_MGR_ADDR + 8) as *const u32) as usize;
     if arr < 0x10000 {
         let _ = writeln!(f, "[{}] gestor: no disponible", ts);
         return;
