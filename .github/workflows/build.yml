@@ -77,7 +77,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
-          name: Pre-release ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
           prerelease: true
           make_latest: false
           files: |
@@ -89,7 +89,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
-          name: Stable ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
           prerelease: false
           make_latest: true
           files: |
