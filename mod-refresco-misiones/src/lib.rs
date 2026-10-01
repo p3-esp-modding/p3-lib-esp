@@ -216,7 +216,8 @@ fn nombre_ciudad(idx: u8) -> &'static str {
 }
 
 /// DIAGNOSTICO TEMPORAL: vuelca los primeros 128 bytes crudos del gestor
-/// 0x702970 en hex para descubrir su layout real en el exe espanol.
+/// 0x702970 y 512 bytes del array al que apunta +0x08, en hex, para
+/// descubrir el layout real de las tareas en el exe espanol.
 /// Solo lee; no modifica nada.
 unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
     let base = TASK_MGR_ADDR as *const u8;
@@ -228,6 +229,19 @@ unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
         hex.push_str(&format!(" {:02X}", *base.add(i)));
     }
     let _ = writeln!(f, "[{ts}] diag{}", hex);
+    // Contenido del array punterizado en +0x08 (512 bytes = 32 entradas de 0x18).
+    let arr = *((TASK_MGR_ADDR + 8) as *const u32) as usize;
+    if arr >= 0x10000 {
+        let a = arr as *const u8;
+        let mut ahex = String::with_capacity(512 * 3);
+        for i in 0..512usize {
+            if i % 16 == 0 {
+                ahex.push_str(&format!("\n[{ts}] arr+{:03X}:", i));
+            }
+            ahex.push_str(&format!(" {:02X}", *a.add(i)));
+        }
+        let _ = writeln!(f, "[{ts}] arr={:#x}{}", arr, ahex);
+    }
 }
 
 /// Vuelca las tareas vivas de opcode 0x85 (misiones de almirantazgo) del
@@ -251,18 +265,25 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
         return;
     }
     // Recorremos las primeras 32 entradas de 0x18 bytes y logueamos las de
-    // opcode 0x85. Si el stride real no es 0x18, el diag lo revelara.
+    // opcode 0x85 CON due plausible (±10 años del tiempo actual) y tipo con
+    // prefijo 0xFF: descarta falsos positivos por stride/offset equivocado.
     const ENTRADAS: usize = 32;
+    let now = *(WORLD_TIME_ADDR as *const u32);
+    let margen = 10 * TICKS_PER_YEAR;
     let mut vivas = 0usize;
     for i in 0..ENTRADAS {
         let t = (arr + i * TASK_SIZE) as *const u8;
         let due = std::ptr::read_unaligned(t as *const u32);
         let next = std::ptr::read_unaligned(t.add(4) as *const u16) as usize;
         let opcode = std::ptr::read_unaligned(t.add(6) as *const u16);
-        if opcode == TASK_OPCODE_MISION {
-            vivas += 1;
+        let due_ok = due > now.wrapping_sub(margen) && due < now.wrapping_add(margen);
+        if opcode == TASK_OPCODE_MISION && due_ok {
             let d = t.add(8);
             let mtipo = std::ptr::read_unaligned(d.add(4) as *const u16);
+            if (mtipo & 0xFF00) != 0xFF00 {
+                continue;
+            }
+            vivas += 1;
             let recont = *d.add(6);
             let mmask = std::ptr::read_unaligned(d.add(8) as *const u32);
             let mciudad = *d.add(0xC);
@@ -270,8 +291,9 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
             let _ = writeln!(
                 f,
                 "[{}] viva[{}] tipo={} mascara=0x{:08X} ciudad={}({}) recont={} \
-                 fecha=(anio {}, dia {}) next={:#x}",
-                ts, i, mtipo, mmask, mciudad, nombre_ciudad(mciudad), recont, va, vd, next
+                 fecha=(anio {}, dia {}) next={:#x} restante_dias={}",
+                ts, i, mtipo, mmask, mciudad, nombre_ciudad(mciudad), recont, va, vd, next,
+                due.wrapping_sub(now) / TICKS_PER_DAY
             );
         }
     }
