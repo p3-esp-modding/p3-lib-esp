@@ -91,17 +91,32 @@ const HOOK_CONT: u32 = 0x005341BA;
 const WORLD_TIME_ADDR: u32 = 0x00701B34;
 const TICKS_PER_YEAR: u32 = 93440;
 const TICKS_PER_DAY: u32 = 256;
-/// Gestor de scheduled tasks (ingles: 0x006DD73C). Layout (comunidad):
-///   +0x00 *tasks (cabeza de la lista enlazada de scheduled_task)
-///   +0x08 u16 earliest index, +0x0C u16 tasks_size, +0x2C mision pendiente.
-/// scheduled_task (0x18 bytes): +0 due u32, +4 next u16, +6 opcode u16,
-/// +8 datos (16 bytes). Opcode 0x85 = mision de almirantazgo, con el payload
-/// AldermanMissionPtr: +0 due, +4 tipo (0xFF00+caso), +5 merchant 0xFF,
-/// +6 reschedule_counter, +8 mascara u32, +0xC ciudad u8, +0xD nombre, +0xE 0xFF.
+/// Gestor de scheduled tasks 0x702970. Layout ESPANOL VERIFICADO en runtime
+/// (desensamblado de FUN_0054C050/FUN_005454D0 + volcado hex):
+///   +0x00 estado/flags u32 (0x12, 0x4...; NO es un puntero)
+///   +0x08 puntero a otro objeto de heap (NO son las tareas)
+///   +0x48 contenedor de tareas inline:
+///     +0x0E => gestor+0x56: count u16 (max 0x34=52 inline)
+///     +0x10 => gestor+0x58: tareas inline, stride 0x14 (20 bytes)
+///   +0x468: puntero a bloque overflow si count >= 52
+/// scheduled_task (0x14 bytes): +0 opcode u32 (0x85 = mision almirantazgo,
+/// 0x86 = limpieza), payload 16 bytes en +4:
+///   +4 due u32, +8 tipo u8 (0=fundar..4=suministro), +9 merchant u8 (0xFF),
+///   +0xA reschedule_counter u8, +0xC mascara u32, +0x10 ciudad u8.
 const TASK_MGR_ADDR: u32 = 0x00702970;
-const TASK_OPCODE_MISION: u16 = 0x85;
-const TASK_SIZE: usize = 0x18;
-const MAX_TASKS_DUMP: usize = 512;
+const TASK_COUNT_OFF: usize = 0x56;
+const TASKS_OFF: usize = 0x58;
+const TASK_OPCODE_MISION: u32 = 0x85;
+const TASK_SIZE: usize = 0x14;
+const MAX_INLINE_TASKS: usize = 0x34;
+
+/// 0x0054C0AE: RET 4 de FUN_0054C050 (registra la tarea en el contenedor
+/// y YA la contiene al llegar aqui). Bytes: C2 04 00 90 90 (ret 4 + 2 nops).
+/// Verificado: ningun salto aterriza en 0x54C0AE..0x54C0B2.
+const HOOK2_RVA: u32 = 0x0014C0AE;
+const HOOK2_EXPECTED: [u8; 5] = [0xC2, 0x04, 0x00, 0x90, 0x90];
+/// Cave2: pushfd/pushad/push arg/call logger/add esp/popad/popfd/ret 4.
+const CAVE2_SIZE: usize = 19;
 
 /// Tamanos de cave: loguear = 32 bytes; acortar = 55 bytes
 /// (bloque de reescritura: 7+2+5+5+4 = 23 en vez de 21).
@@ -110,6 +125,10 @@ const CAVE_SIZE_ACORTAR: usize = 55;
 
 unsafe fn hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK_RVA) as *const u8, 5) == HOOK_EXPECTED
+}
+
+unsafe fn hook2_target_matches() -> bool {
+    std::slice::from_raw_parts((IMAGE_BASE + HOOK2_RVA) as *const u8, 5) == HOOK2_EXPECTED
 }
 
 // ---------- config ----------
@@ -215,89 +234,81 @@ fn nombre_ciudad(idx: u8) -> &'static str {
     CIUDADES.get(idx as usize).copied().unwrap_or("?")
 }
 
-/// DIAGNOSTICO TEMPORAL: vuelca los primeros 128 bytes crudos del gestor
-/// 0x702970 y 512 bytes del array al que apunta +0x08, en hex, para
-/// descubrir el layout real de las tareas en el exe espanol.
-/// Solo lee; no modifica nada.
-unsafe fn diag_gestor(f: &mut std::fs::File, ts: &str) {
-    let base = TASK_MGR_ADDR as *const u8;
-    let mut hex = String::with_capacity(128 * 3);
-    for i in 0..128usize {
-        if i % 16 == 0 {
-            hex.push_str(&format!("\n[{ts}] gestor+{:02X}:", i));
+/// Vuelca las tareas vivas (opcode 0x85) del contenedor inline del gestor:
+/// count u16 en gestor+0x56 (max 52), tareas en gestor+0x58 stride 0x14.
+/// Layout verificado con el desensamblado de FUN_005454D0 (memcpy por
+/// [ebx+eax*4+0x10] con eax*5 => stride 0x14) y el volcado hex en runtime.
+/// Solo lee memoria del juego; no modifica nada.
+unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
+    let count = *((TASK_MGR_ADDR + TASK_COUNT_OFF) as *const u16) as usize;
+    let n = count.min(MAX_INLINE_TASKS);
+    let now = *(WORLD_TIME_ADDR as *const u32);
+    let mut vivas = 0usize;
+    for i in 0..n {
+        let t = (TASK_MGR_ADDR as usize + TASKS_OFF + i * TASK_SIZE) as *const u8;
+        let opcode = std::ptr::read_unaligned(t as *const u32);
+        if opcode != TASK_OPCODE_MISION {
+            continue;
         }
-        hex.push_str(&format!(" {:02X}", *base.add(i)));
+        vivas += 1;
+        let due = std::ptr::read_unaligned(t.add(4) as *const u32);
+        let tipo = *t.add(8);
+        let recont = *t.add(0xA);
+        let mmask = std::ptr::read_unaligned(t.add(0xC) as *const u32);
+        let mciudad = *t.add(0x10);
+        let (va, vd) = fecha(due);
+        let _ = writeln!(
+            f,
+            "[{}] viva[{}] tipo={}({}) mascara=0x{:08X} ciudad={}({}) recont={} \
+             fecha=(anio {}, dia {}) restante_dias={}",
+            ts, i, tipo, nombre_mision(tipo), mmask, mciudad, nombre_ciudad(mciudad), recont,
+            va, vd, due.wrapping_sub(now) / TICKS_PER_DAY
+        );
     }
-    let _ = writeln!(f, "[{ts}] diag{}", hex);
-    // Contenido del array punterizado en +0x08 (512 bytes = 32 entradas de 0x18).
-    let arr = *((TASK_MGR_ADDR + 8) as *const u32) as usize;
-    if arr >= 0x10000 {
-        let a = arr as *const u8;
-        let mut ahex = String::with_capacity(512 * 3);
-        for i in 0..512usize {
-            if i % 16 == 0 {
-                ahex.push_str(&format!("\n[{ts}] arr+{:03X}:", i));
-            }
-            ahex.push_str(&format!(" {:02X}", *a.add(i)));
-        }
-        let _ = writeln!(f, "[{ts}] arr={:#x}{}", arr, ahex);
+    let _ = writeln!(f, "[{}] gestor: {} tareas, {} misiones vivas", ts, n, vivas);
+}
+
+fn nombre_mision(tipo: u8) -> &'static str {
+    match tipo {
+        0 => "fundar",
+        1 => "ruta",
+        2 => "pirata",
+        3 => "esconderijo",
+        4 => "suministro",
+        _ => "?",
     }
 }
 
-/// Vuelca las tareas vivas de opcode 0x85 (misiones de almirantazgo) del
-/// gestor 0x702970. Se llama DESPUES de que el generador registre las suyas,
-/// asi que muestra el estado completo: que hay, con que fecha/ciudad/mascara.
-/// Solo lee memoria del juego; no modifica nada.
-///
-/// BLINDAJE: el generador tambien corre al cargar partida, cuando el gestor
-/// puede no estar inicializado ([0x702970] = basura como 0x12, que NO es 0 y
-/// pasa un check de nulidad -> page fault al leer [0x16]). Por eso se valida
-/// que head parezca un puntero real, que size/earliest/next esten en rango, y
-/// ante cualquier valor raro se aborta el volcado sin leer.
-unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
-    // Layout espanol (deducido del diag): +0x00 estado/flags (0x12, 0x4...),
-    // +0x08 puntero al array de tareas, +0x2C.. sentinela 0xFFFFFFFF.
-    // El struct ingles (field_0_tasks en +0x00) NO cuadra aqui.
-    let estado = *(TASK_MGR_ADDR as *const u32);
-    let arr = *((TASK_MGR_ADDR + 8) as *const u32) as usize;
-    if arr < 0x10000 {
-        let _ = writeln!(f, "[{}] gestor: no disponible", ts);
+/// Llamada desde la cave2 (RET 4 de FUN_0054C050) con el puntero al record
+/// recien registrado (arg stdcall de la funcion). cdecl aqui: el caller
+/// limpia con add esp,4. Solo actua si el record es una mision (0x85).
+#[no_mangle]
+pub unsafe extern "C" fn p3esp_tarea_registrada(record: u32) {
+    if record < 0x10000 {
         return;
     }
-    // Recorremos las primeras 32 entradas de 0x18 bytes y logueamos las de
-    // opcode 0x85 CON due plausible (±10 años del tiempo actual) y tipo con
-    // prefijo 0xFF: descarta falsos positivos por stride/offset equivocado.
-    const ENTRADAS: usize = 32;
-    let now = *(WORLD_TIME_ADDR as *const u32);
-    let margen = 10 * TICKS_PER_YEAR;
-    let mut vivas = 0usize;
-    for i in 0..ENTRADAS {
-        let t = (arr + i * TASK_SIZE) as *const u8;
-        let due = std::ptr::read_unaligned(t as *const u32);
-        let next = std::ptr::read_unaligned(t.add(4) as *const u16) as usize;
-        let opcode = std::ptr::read_unaligned(t.add(6) as *const u16);
-        let due_ok = due > now.wrapping_sub(margen) && due < now.wrapping_add(margen);
-        if opcode == TASK_OPCODE_MISION && due_ok {
-            let d = t.add(8);
-            let mtipo = std::ptr::read_unaligned(d.add(4) as *const u16);
-            if (mtipo & 0xFF00) != 0xFF00 {
-                continue;
-            }
-            vivas += 1;
-            let recont = *d.add(6);
-            let mmask = std::ptr::read_unaligned(d.add(8) as *const u32);
-            let mciudad = *d.add(0xC);
-            let (va, vd) = fecha(due);
-            let _ = writeln!(
-                f,
-                "[{}] viva[{}] tipo={} mascara=0x{:08X} ciudad={}({}) recont={} \
-                 fecha=(anio {}, dia {}) next={:#x} restante_dias={}",
-                ts, i, mtipo, mmask, mciudad, nombre_ciudad(mciudad), recont, va, vd, next,
-                due.wrapping_sub(now) / TICKS_PER_DAY
-            );
-        }
+    let r = record as *const u8;
+    let opcode = std::ptr::read_unaligned(r as *const u32);
+    if opcode != TASK_OPCODE_MISION {
+        return;
     }
-    let _ = writeln!(f, "[{}] gestor: {} misiones vivas (estado={:#x})", ts, vivas, estado);
+    let ts = hora_real();
+    let now = *(WORLD_TIME_ADDR as *const u32);
+    let due = std::ptr::read_unaligned(r.add(4) as *const u32);
+    let tipo = *r.add(8);
+    let mmask = std::ptr::read_unaligned(r.add(0xC) as *const u32);
+    let mciudad = *r.add(0x10);
+    let (va, vd) = fecha(due);
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("misiones_log.txt") {
+        let _ = writeln!(
+            f,
+            "[{}] registrada tipo={}({}) mascara=0x{:08X} ciudad={}({}) \
+             fecha=(anio {}, dia {}) restante_dias={}",
+            ts, tipo, nombre_mision(tipo), mmask, mciudad, nombre_ciudad(mciudad), va, vd,
+            due.wrapping_sub(now) / TICKS_PER_DAY
+        );
+        volcar_gestor(&mut f, &ts);
+    }
 }
 
 /// Llamada desde la cave con (due, tipo, mascara, ciudad).
@@ -323,7 +334,6 @@ pub unsafe extern "stdcall" fn p3esp_mision_log(due: u32, tipo: u32, mask: u32, 
              fecha_mision=(anio {}, dia {}) delta_dias={}",
             ts, mask, ciudad, nombre_ciudad(ciudad), ya, yd, va, vd, gap
         );
-        diag_gestor(&mut f, &ts);
         volcar_gestor(&mut f, &ts);
     }
     log_info(&format!(
@@ -433,6 +443,76 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
     true
 }
 
+/// Segundo hook: 0x0054C0AE (RET 4 de FUN_0054C050, el que REGISTRA la
+/// tarea). Dispara justo DESPUES de que la tarea este en el contenedor, a
+/// diferencia del epilogo del generador (donde aun no existe). La cave:
+///   pushfd; pushad; push [esp+0x28] (arg original [esp+4] = record);
+///   call p3esp_tarea_registrada (cdecl); add esp,4; popad; popfd; ret 4
+/// El ret 4 final ejecuta la instruccion original desplazada (el JMP solo
+/// pisa C2 04 00 90 90), asi que no hace falta saltar detras.
+unsafe fn apply_hook2() -> bool {
+    if !hook2_target_matches() {
+        log_error("mod-refresco-misiones: bytes en 0x0054C0AE no compatibles");
+        return false;
+    }
+    let cave = VirtualAlloc(
+        None,
+        CAVE2_SIZE,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE,
+    );
+    if cave.is_null() {
+        log_error("mod-refresco-misiones: VirtualAlloc cave2 devolvio NULL");
+        return false;
+    }
+    let cave_addr = cave as u32;
+    let p = cave as *mut u8;
+
+    // Rel del call calculado ANTES de escribir el opcode (leccion E0503/rel32).
+    let logger = p3esp_tarea_registrada as usize as u32;
+    let rel_call = logger.wrapping_sub(cave_addr + 6 + 5);
+    let mut i = 0usize;
+    let put = |p: *mut u8, i: &mut usize, bytes: &[u8]| unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(*i), bytes.len());
+        *i += bytes.len();
+    };
+    put(p, &mut i, &[0x9C]); // pushfd
+    put(p, &mut i, &[0x60]); // pushad
+    put(p, &mut i, &[0xFF, 0x74, 0x24, 0x28]); // push dword [esp+0x28]
+    put(p, &mut i, &[0xE8]); // call rel32 (offset 6)
+    put(p, &mut i, &rel_call.to_le_bytes());
+    put(p, &mut i, &[0x83, 0xC4, 0x04]); // add esp,4 (cdecl limpia el arg)
+    put(p, &mut i, &[0x61]); // popad
+    put(p, &mut i, &[0x9D]); // popfd
+    put(p, &mut i, &[0xC2, 0x04, 0x00]); // ret 4 (instruccion original)
+    if i != CAVE2_SIZE {
+        log_error("mod-refresco-misiones: tamano de cave2 desajustado (bug interno)");
+        return false;
+    }
+
+    let mut old = PAGE_PROTECTION_FLAGS(0);
+    if !VirtualProtect(cave as _, CAVE2_SIZE, PAGE_EXECUTE_READ, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: VirtualProtect cave2 fallo");
+        return false;
+    }
+
+    // JMP rel32 en 0x0054C0AE -> cave2 (pisa C2 04 00 90 90).
+    let patch = (IMAGE_BASE + HOOK2_RVA) as *mut u8;
+    let rel = cave_addr.wrapping_sub(IMAGE_BASE + HOOK2_RVA + 5);
+    if !VirtualProtect(patch as _, 5, PAGE_EXECUTE_READWRITE, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: VirtualProtect patch2 fallo");
+        return false;
+    }
+    *patch = 0xE9;
+    std::ptr::write_unaligned(patch.add(1) as *mut u32, rel);
+    if !VirtualProtect(patch as _, 5, old, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: restaurar proteccion patch2 fallo");
+        return false;
+    }
+
+    true
+}
+
 // ---------- start() (contrato del modloader) -----------
 
 static STARTED: Once = Once::new();
@@ -443,7 +523,9 @@ pub unsafe extern "C" fn start() -> u32 {
     STARTED.call_once(|| {
         let acortar = cfg_modo_acortar();
         let delta = (cfg_meses().saturating_mul(TICKS_PER_YEAR)) / 12;
+        let mut h1 = false;
         if apply_hook(acortar, delta) {
+            h1 = true;
             if acortar {
                 log_info(&format!(
                     "mod-refresco-misiones: modo ACORTAR (EXPERIMENTAL); la fecha de \
@@ -458,7 +540,16 @@ pub unsafe extern "C" fn start() -> u32 {
                      se registran en misiones_log.txt (sin tocar nada del juego)",
                 );
             }
-        } else {
+        }
+        // Hook2 (post-registro en FUN_0054C050): solo informativo; si falla
+        // no se aborta el mod (el hook1 sigue funcionando).
+        if !apply_hook2() {
+            log_error(
+                "mod-refresco-misiones: hook2 (post-registro) NO instalado; \
+                 solo se loguearan las generaciones, no los volcados del gestor",
+            );
+        }
+        if !h1 {
             ok = false;
         }
     });
