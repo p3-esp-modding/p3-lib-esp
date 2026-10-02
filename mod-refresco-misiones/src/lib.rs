@@ -240,7 +240,7 @@ fn nombre_ciudad(idx: u8) -> &'static str {
 /// [ebx+eax*4+0x10] con eax*5 => stride 0x14) y el volcado hex en runtime.
 /// Solo lee memoria del juego; no modifica nada.
 unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
-    let count = *((TASK_MGR_ADDR + TASK_COUNT_OFF) as *const u16) as usize;
+    let count = *((TASK_MGR_ADDR as usize + TASK_COUNT_OFF) as *const u16) as usize;
     let n = count.min(MAX_INLINE_TASKS);
     let now = *(WORLD_TIME_ADDR as *const u32);
     let mut vivas = 0usize;
