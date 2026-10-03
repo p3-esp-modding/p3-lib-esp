@@ -75,7 +75,7 @@ use p3_esp_modlib::{log_error, log_info};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 use windows::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ,
     PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
@@ -132,8 +132,9 @@ const WORLD_TOWN_IDS_ADDR: u32 = 0x00701B38;
 const TOWN_ID_TABLE_ADDR: u32 = 0x00673D60;
 const MAX_SITES: u8 = 0x28; // 40 emplazamientos (cmp de FUN_00516FC0)
 
-/// Ciudad preferida del cfg ([misiones] ciudad=indice|nombre). 0xFF = sin pref.
-static PREF_CIUDAD: AtomicU8 = AtomicU8::new(0xFF);
+/// Ciudades preferidas del cfg ([misiones] ciudad=a,b,c): lista ordenada de
+/// hasta 8, probadas en cascada (primera no fundada gana). 0xFF = fin de lista.
+static PREFS: Mutex<[u8; 8]> = Mutex::new([0xFF; 8]);
 static AVISA_PREF: Once = Once::new();
 
 /// 0x004F8C9F: `mov eax,[0x70299C]` en el tick diario, justo ANTES del test
@@ -183,36 +184,42 @@ fn read_cfg_value(section: &str, key: &str) -> Option<String> {
     None
 }
 
-/// [misiones] ciudad = indice 0..39 o nombre (p. ej. "gdansk").
-/// None = sin preferencia (se usa la que calcula el juego).
-fn cfg_ciudad_pref() -> Option<u8> {
-    let v = read_cfg_value("misiones", "ciudad")?;
-    let s = v.trim();
-    if s.is_empty() {
-        return None;
-    }
-    if let Ok(n) = s.parse::<u16>() {
-        if n < MAX_SITES as u16 {
-            return Some(n as u8);
+/// [misiones] ciudad = una o varias separadas por coma, en orden de preferencia
+/// (p. ej. "memel,windau,konigsberg"). Valores invalidos se saltan con error
+/// en el log. Lista vacia = sin preferencia.
+fn cfg_ciudades_pref() -> Vec<u8> {
+    let v = match read_cfg_value("misiones", "ciudad") {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for parte in v.split(',') {
+        let s = parte.trim();
+        if s.is_empty() {
+            continue;
         }
-        log_error(&format!(
-            "mod-refresco-misiones: ciudad={} fuera de rango (0..39); sin preferencia",
-            n
-        ));
-        return None;
-    }
-    let l = s.to_ascii_lowercase();
-    match CIUDADES.iter().position(|c| c.to_ascii_lowercase() == l) {
-        Some(i) => Some(i as u8),
-        None => {
-            log_error(&format!(
-                "mod-refresco-misiones: ciudad=\"{}\" no reconocida (indice 0..39 o nombre); \
-                 sin preferencia",
+        if let Ok(n) = s.parse::<u16>() {
+            if n < MAX_SITES as u16 {
+                out.push(n as u8);
+            } else {
+                log_error(&format!(
+                    "mod-refresco-misiones: ciudad={} fuera de rango (0..39); se salta",
+                    n
+                ));
+            }
+            continue;
+        }
+        let l = s.to_ascii_lowercase();
+        match CIUDADES.iter().position(|c| c.to_ascii_lowercase() == l) {
+            Some(i) => out.push(i as u8),
+            None => log_error(&format!(
+                "mod-refresco-misiones: ciudad=\"{}\" no reconocida; se salta",
                 s
-            ));
-            None
+            )),
         }
     }
+    out.truncate(8);
+    out
 }
 
 // ---------- firma del cfg (para forzar recalculo al cambiar config) ----------
@@ -324,32 +331,41 @@ fn ciudad_ya_fundada(id: u8) -> bool {
 }
 
 /// Llamada desde la cave con puntero a [esp+0x58] (ciudad + byte de id).
-/// Aplica la preferencia del cfg SOLO si la ciudad no esta fundada; en caso
-/// contrario deja la que calculo el juego (preferencia, nunca fuerza).
+/// Aplica la PRIMERA ciudad preferida del cfg que no este fundada (cascada);
+/// si todas estan fundadas o coincide con la actual, deja la que calculo el
+/// juego (preferencia, nunca fuerza).
 #[no_mangle]
 pub unsafe extern "stdcall" fn p3esp_pref_ciudad(p_town: *mut u8) {
-    let pref = PREF_CIUDAD.load(Ordering::Relaxed);
-    if pref == 0xFF || pref >= MAX_SITES {
-        return;
-    }
+    let prefs = match PREFS.lock() {
+        Ok(g) => *g,
+        Err(_) => return,
+    };
     let actual = *p_town;
-    if actual == pref {
+    let mut alguna_fundada = false;
+    for &pref in prefs.iter() {
+        if pref == 0xFF || pref >= MAX_SITES {
+            break;
+        }
+        if pref == actual {
+            return; // ya se ofrece la preferida: nada que hacer
+        }
+        if ciudad_ya_fundada(pref) {
+            alguna_fundada = true;
+            continue; // probamos la siguiente de la cascada
+        }
+        *p_town = pref;
+        // byte de id en +1, igual que hace 0x00533D91 (tabla 0x673D60[ciudad]).
+        *p_town.add(1) = *((TOWN_ID_TABLE_ADDR + pref as u32) as *const u8);
         return;
     }
-    if ciudad_ya_fundada(pref) {
+    if alguna_fundada {
         AVISA_PREF.call_once(|| {
-            log_info(&format!(
-                "mod-refresco-misiones: ciudad preferida {}({}) ya fundada; \
-                 se usa la que calcula el juego",
-                pref,
-                nombre_ciudad(pref)
-            ));
+            log_info(
+                "mod-refresco-misiones: ninguna ciudad preferida disponible \
+                 (ya fundadas); se usa la que calcula el juego",
+            );
         });
-        return;
     }
-    *p_town = pref;
-    // byte de id en +1, igual que hace 0x00533D91 (tabla 0x673D60[ciudad]).
-    *p_town.add(1) = *((TOWN_ID_TABLE_ADDR + pref as u32) as *const u8);
 }
 
 /// Vuelca las tareas vivas (opcode 0x85) del contenedor inline del gestor:
@@ -702,13 +718,18 @@ static STARTED: Once = Once::new();
 pub unsafe extern "C" fn start() -> u32 {
     let mut ok = true;
     STARTED.call_once(|| {
-        if let Some(ciudad) = cfg_ciudad_pref() {
-            PREF_CIUDAD.store(ciudad, Ordering::Relaxed);
+        let prefs = cfg_ciudades_pref();
+        if !prefs.is_empty() {
+            if let Ok(mut arr) = PREFS.lock() {
+                for (i, p) in prefs.iter().enumerate() {
+                    arr[i] = *p;
+                }
+            }
+            let nombres: Vec<&str> = prefs.iter().map(|p| nombre_ciudad(*p)).collect();
             log_info(&format!(
-                "mod-refresco-misiones: ciudad preferida {}({}) para la mision de fundar; \
-                 si ya esta fundada se usa la calculada por el juego",
-                ciudad,
-                nombre_ciudad(ciudad)
+                "mod-refresco-misiones: ciudades preferidas [{}] para la mision de \
+                 fundar; se usa la primera no fundada (si no, la calculada)",
+                nombres.join(", ")
             ));
         }
         if apply_hook() {
