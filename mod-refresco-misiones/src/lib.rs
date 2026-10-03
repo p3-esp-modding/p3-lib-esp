@@ -1,7 +1,6 @@
 // mod-refresco-misiones
 //
-// OBSERVADOR de las misiones de gobernador (almirantazgo), con opcion
-// EXPERIMENTAL de acortar la fecha de la mision de fundar ciudad.
+// OBSERVADOR de la mision de fundar ciudad (gobernador/almirantazgo).
 //
 // ===========================================================================
 // QUE HACE EL JUEGO (resumen del analisis, exe espanol VA=0x400000+fileoff)
@@ -39,8 +38,8 @@
 //   [esp+0x54] = mascara de productos (u32; solo caso fundar ciudad)
 //   [esp+0x58] = ciudad elegida (u8; solo caso fundar ciudad)
 // El hook sustituye los 5 bytes 0x005341B4 (8D 4C 24 4C 6A = LEA ECX,[esp+4C]
-// + PUSH 0x10) por un JMP a la cave; la cave reejecuta esos bytes, loguea (y
-// opcionalmente reescribe la fecha) y salta a 0x005341BA.
+// + PUSH 0x10) por un JMP a la cave; la cave reejecuta esos bytes, loguea
+// y salta a 0x005341BA.
 //
 // ===========================================================================
 // LA LECCION STDCALL (bug de la v1 de este mod, NO USAR builds antiguas)
@@ -55,17 +54,11 @@
 // Verificado byte a byte con objdump (verificar_mods.py).
 //
 // ===========================================================================
-// CONFIG ([misiones] en p3_esp_mods.cfg)
+// CONFIG
 // ===========================================================================
-//   modo = loguear (DEFAULT) | acortar
-//   fundarCiudadMeses = 3   (solo con modo=acortar; 0..=36, vanilla 25)
-//
-// El log se escribe en misiones_log.txt (carpeta del juego) y en
-// Patrician3_modloader.log.
-//
-// NOTA sobre el parche de 1 byte: tocar el inmediato 0x19 en 0x00533D33 solo
-// permite N >= 12 (la division magica por meses exige mes+N >= 13 y el INC EDX
-// fuerza >= 1 anio). La cave no tiene esa limitacion.
+// Sin configuracion: el mod solo observa y escribe misiones_log.txt
+// (carpeta del juego) ademas de Patrician3_modloader.log.
+// Solo registra la mision de FUNDAR ciudad; los demas tipos se ignoran.
 
 #![allow(non_snake_case, non_camel_case_types)]
 
@@ -118,10 +111,8 @@ const HOOK2_EXPECTED: [u8; 5] = [0xC2, 0x04, 0x00, 0x90, 0x90];
 /// Cave2: pushfd/pushad/push arg/call logger/add esp/popad/popfd/ret 4.
 const CAVE2_SIZE: usize = 19;
 
-/// Tamanos de cave: loguear = 32 bytes; acortar = 55 bytes
-/// (bloque de reescritura: 7+2+5+5+4 = 23 en vez de 21).
-const CAVE_SIZE_LOG: usize = 32;
-const CAVE_SIZE_ACORTAR: usize = 55;
+/// Tamano de cave: 32 bytes.
+const CAVE_SIZE: usize = 32;
 
 unsafe fn hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK_RVA) as *const u8, 5) == HOOK_EXPECTED
@@ -131,75 +122,7 @@ unsafe fn hook2_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK2_RVA) as *const u8, 5) == HOOK2_EXPECTED
 }
 
-// ---------- config ----------
-
-fn read_cfg_value(section: &str, key: &str) -> Option<String> {
-    let content = std::fs::read_to_string("p3_esp_mods.cfg").ok()?;
-    let mut in_section = false;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            in_section = line[1..line.len() - 1].trim().eq_ignore_ascii_case(section);
-            continue;
-        }
-        if in_section {
-            if let Some(eq) = line.find('=') {
-                let k = line[..eq].trim();
-                let v = line[eq + 1..].trim();
-                if k.eq_ignore_ascii_case(key) {
-                    return Some(v.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn cfg_modo_acortar() -> bool {
-    match read_cfg_value("misiones", "modo") {
-        Some(v) => {
-            let s = v.trim().to_ascii_lowercase();
-            match s.as_str() {
-                "loguear" | "log" | "loguea" | "observar" | "" => false,
-                "acortar" | "rapido" | "fast" => true,
-                _ => {
-                    log_error(&format!(
-                        "mod-refresco-misiones: modo=\"{}\" no reconocido (loguear|acortar); \
-                         se usa loguear",
-                        v.trim()
-                    ));
-                    false
-                }
-            }
-        }
-        None => false,
-    }
-}
-
-fn cfg_meses() -> u32 {
-    match read_cfg_value("misiones", "fundarCiudadMeses")
-        .or_else(|| read_cfg_value("misiones", "fundar_ciudad_meses"))
-    {
-        Some(v) => match v.trim().parse::<u32>() {
-            Ok(n @ 0..=36) => n,
-            Ok(n) => {
-                log_error(&format!(
-                    "mod-refresco-misiones: fundarCiudadMeses={} fuera de rango (0..=36); se usa 36",
-                    n
-                ));
-                36
-            }
-            Err(_) => {
-                log_error(&format!(
-                    "mod-refresco-misiones: fundarCiudadMeses=\"{}\" no es un numero; se usa 3",
-                    v.trim()
-                ));
-                3
-            }
-        },
-        None => 3,
-    }
-}
+// Sin configuracion: el mod solo observa.
 
 // ---------- logger (stdcall, la cave la llama con 4 args) ----------
 
@@ -253,6 +176,9 @@ unsafe fn volcar_gestor(f: &mut std::fs::File, ts: &str) {
         vivas += 1;
         let due = std::ptr::read_unaligned(t.add(4) as *const u32);
         let tipo = *t.add(8);
+        if tipo != 0 {
+            continue;
+        }
         let recont = *t.add(0xA);
         let mmask = std::ptr::read_unaligned(t.add(0xC) as *const u32);
         let mciudad = *t.add(0x10);
@@ -296,6 +222,9 @@ pub unsafe extern "C" fn p3esp_tarea_registrada(record: u32) {
     let now = *(WORLD_TIME_ADDR as *const u32);
     let due = std::ptr::read_unaligned(r.add(4) as *const u32);
     let tipo = *r.add(8);
+    if tipo != 0 {
+        return;
+    }
     let mmask = std::ptr::read_unaligned(r.add(0xC) as *const u32);
     let mciudad = *r.add(0x10);
     let (va, vd) = fecha(due);
@@ -308,6 +237,7 @@ pub unsafe extern "C" fn p3esp_tarea_registrada(record: u32) {
             due.wrapping_sub(now) / TICKS_PER_DAY
         );
         volcar_gestor(&mut f, &ts);
+        let _ = writeln!(f);
     }
 }
 
@@ -335,6 +265,7 @@ pub unsafe extern "stdcall" fn p3esp_mision_log(due: u32, tipo: u32, mask: u32, 
             ts, mask, ciudad, nombre_ciudad(ciudad), ya, yd, va, vd, gap
         );
         volcar_gestor(&mut f, &ts);
+        let _ = writeln!(f);
     }
     log_info(&format!(
         "mod-refresco-misiones: [{}] fundar ciudad={}({}) mascara=0x{:08X} delta_dias={}",
@@ -344,7 +275,7 @@ pub unsafe extern "stdcall" fn p3esp_mision_log(due: u32, tipo: u32, mask: u32, 
 
 // ---------- cave ----------
 
-unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
+unsafe fn apply_hook() -> bool {
     if !hook_target_matches() {
         log_error(
             "mod-refresco-misiones: version o bytes del EXE no compatibles \
@@ -352,7 +283,7 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
         );
         return false;
     }
-    let size = if acortar { CAVE_SIZE_ACORTAR } else { CAVE_SIZE_LOG };
+    let size = CAVE_SIZE;
     let cave = VirtualAlloc(None, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if cave.is_null() {
         log_error("mod-refresco-misiones: VirtualAlloc devolvio NULL");
@@ -375,21 +306,6 @@ unsafe fn apply_hook(acortar: bool, delta: u32) -> bool {
         }
     }
     let mut c = Cave { p, n: 0 };
-
-    if acortar {
-        // Solo reescribir la fecha del caso "fundar ciudad" (tipo == 0xFF00):
-        //   cmp word [esp+0x50],0xFF00 ; jne +17 ; mov eax,[0x701B34] ;
-        //   add eax,delta ; mov [esp+0x4C],eax
-        // (OJO: el tipo real es 0xFF00+caso, no 0..4; el antiguo cmp contra 0
-        //  nunca coincidia y el modo acortar era un no-op.)
-        c.push(&[0x66, 0x81, 0x7C, 0x24, 0x50, 0x00, 0xFF]); // cmp word [esp+0x50],0xFF00
-        c.push(&[0x75, 0x11]); // jne +17 (salta el bloque de reescritura)
-        c.push(&[0xA1]); // mov eax,[0x00701B34]
-        c.push(&WORLD_TIME_ADDR.to_le_bytes());
-        c.push(&[0x05]); // add eax, delta
-        c.push(&delta.to_le_bytes());
-        c.push(&[0x89, 0x44, 0x24, 0x4C]); // mov [esp+0x4C],eax  (fecha)
-    }
 
     // logger(due, tipo, mask, town) - stdcall RET 16; args en orden inverso.
     // En este punto ESP = frame del generador:
@@ -521,25 +437,13 @@ static STARTED: Once = Once::new();
 pub unsafe extern "C" fn start() -> u32 {
     let mut ok = true;
     STARTED.call_once(|| {
-        let acortar = cfg_modo_acortar();
-        let delta = (cfg_meses().saturating_mul(TICKS_PER_YEAR)) / 12;
-        let mut h1 = false;
-        if apply_hook(acortar, delta) {
-            h1 = true;
-            if acortar {
-                log_info(&format!(
-                    "mod-refresco-misiones: modo ACORTAR (EXPERIMENTAL); la fecha de \
-                     la mision de fundar ciudad se reescribe a ahora+delta={} ticks \
-                     (25 meses vanilla = {} ticks). Los registros van a misiones_log.txt",
-                    delta,
-                    25 * TICKS_PER_YEAR / 12
-                ));
-            } else {
-                log_info(
-                    "mod-refresco-misiones: modo LOGUEAR; las misiones del gobernador \
-                     se registran en misiones_log.txt (sin tocar nada del juego)",
-                );
-            }
+        if apply_hook() {
+            log_info(
+                "mod-refresco-misiones: observando la mision de fundar ciudad; \
+                 los registros van a misiones_log.txt (sin tocar nada del juego)",
+            );
+        } else {
+            ok = false;
         }
         // Hook2 (post-registro en FUN_0054C050): solo informativo; si falla
         // no se aborta el mod (el hook1 sigue funcionando).
@@ -548,9 +452,6 @@ pub unsafe extern "C" fn start() -> u32 {
                 "mod-refresco-misiones: hook2 (post-registro) NO instalado; \
                  solo se loguearan las generaciones, no los volcados del gestor",
             );
-        }
-        if !h1 {
-            ok = false;
         }
     });
     ok as u32
