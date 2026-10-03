@@ -54,17 +54,20 @@
 // Verificado byte a byte con objdump (verificar_mods.py).
 //
 // ===========================================================================
-// CONFIG
+// CONFIG ([misiones] en p3_esp_mods.cfg)
 // ===========================================================================
-// Sin configuracion: el mod solo observa y escribe misiones_log.txt
-// (carpeta del juego) ademas de Patrician3_modloader.log.
+//   ciudad = indice 0..39 o nombre (p. ej. "gdansk"): ciudad PREFERIDA para
+//   la mision de fundar. Si ya esta fundada se ignora y se usa la que calcula
+//   el juego. Sin clave o vacio = sin preferencia.
 // Solo registra la mision de FUNDAR ciudad; los demas tipos se ignoran.
+// El log se escribe en misiones_log.txt (carpeta del juego).
 
 #![allow(non_snake_case, non_camel_case_types)]
 
 use p3_esp_modlib::{log_error, log_info};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Once;
 use windows::Win32::System::Memory::{
     VirtualAlloc, VirtualProtect, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ,
@@ -111,8 +114,20 @@ const HOOK2_EXPECTED: [u8; 5] = [0xC2, 0x04, 0x00, 0x90, 0x90];
 /// Cave2: pushfd/pushad/push arg/call logger/add esp/popad/popfd/ret 4.
 const CAVE2_SIZE: usize = 19;
 
-/// Tamano de cave: 32 bytes.
-const CAVE_SIZE: usize = 32;
+/// Tamano de cave: 42 bytes (32 del logger + 10 del call al helper de
+/// ciudad preferida: lea eax,[esp+0x58] (4) + push eax (1) + call (5)).
+const CAVE_SIZE: usize = 42;
+
+/// world+0x10 = towns_count (u32), world+0x18 = ids de ciudades fundadas (u8),
+/// tabla ciudad->id usada en la mision (byte [ciudad] en 0x673D60).
+const WORLD_TOWNS_COUNT_ADDR: u32 = 0x00701B30;
+const WORLD_TOWN_IDS_ADDR: u32 = 0x00701B38;
+const TOWN_ID_TABLE_ADDR: u32 = 0x00673D60;
+const MAX_SITES: u8 = 0x28; // 40 emplazamientos (cmp de FUN_00516FC0)
+
+/// Ciudad preferida del cfg ([misiones] ciudad=indice|nombre). 0xFF = sin pref.
+static PREF_CIUDAD: AtomicU8 = AtomicU8::new(0xFF);
+static AVISA_PREF: Once = Once::new();
 
 unsafe fn hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK_RVA) as *const u8, 5) == HOOK_EXPECTED
@@ -122,7 +137,61 @@ unsafe fn hook2_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK2_RVA) as *const u8, 5) == HOOK2_EXPECTED
 }
 
-// Sin configuracion: el mod solo observa.
+// ---------- config ----------
+
+fn read_cfg_value(section: &str, key: &str) -> Option<String> {
+    let content = std::fs::read_to_string("p3_esp_mods.cfg").ok()?;
+    let mut in_section = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_section = line[1..line.len() - 1].trim().eq_ignore_ascii_case(section);
+            continue;
+        }
+        if in_section {
+            if let Some(eq) = line.find('=') {
+                let k = line[..eq].trim();
+                let v = line[eq + 1..].trim();
+                if k.eq_ignore_ascii_case(key) {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// [misiones] ciudad = indice 0..39 o nombre (p. ej. "gdansk").
+/// None = sin preferencia (se usa la que calcula el juego).
+fn cfg_ciudad_pref() -> Option<u8> {
+    let v = read_cfg_value("misiones", "ciudad")?;
+    let s = v.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(n) = s.parse::<u16>() {
+        if n < MAX_SITES as u16 {
+            return Some(n as u8);
+        }
+        log_error(&format!(
+            "mod-refresco-misiones: ciudad={} fuera de rango (0..39); sin preferencia",
+            n
+        ));
+        return None;
+    }
+    let l = s.to_ascii_lowercase();
+    match CIUDADES.iter().position(|c| c.to_ascii_lowercase() == l) {
+        Some(i) => Some(i as u8),
+        None => {
+            log_error(&format!(
+                "mod-refresco-misiones: ciudad=\"{}\" no reconocida (indice 0..39 o nombre); \
+                 sin preferencia",
+                s
+            ));
+            None
+        }
+    }
+}
 
 // ---------- logger (stdcall, la cave la llama con 4 args) ----------
 
@@ -155,6 +224,59 @@ const CIUDADES: [&str; 40] = [
 
 fn nombre_ciudad(idx: u8) -> &'static str {
     CIUDADES.get(idx as usize).copied().unwrap_or("?")
+}
+
+/// Ciudades ocupadas: replica el filtro de FUN_00516FC0 (ids de la tabla
+/// world+0x18 y ids de las ciudades con oficina de los 5 merchants).
+fn ciudad_ya_fundada(id: u8) -> bool {
+    unsafe {
+        let count = *(WORLD_TOWNS_COUNT_ADDR as *const u32) as usize;
+        let ids = WORLD_TOWN_IDS_ADDR as *const u8;
+        for i in 0..count.min(64) {
+            if *ids.add(i) == id {
+                return true;
+            }
+        }
+        for k in 0..5u32 {
+            let p = *((0x00700E34 + k * 4) as *const u32);
+            if p >= 0x10000 {
+                let mid = *((p + 0xE) as *const u8);
+                if mid == id {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Llamada desde la cave con puntero a [esp+0x58] (ciudad + byte de id).
+/// Aplica la preferencia del cfg SOLO si la ciudad no esta fundada; en caso
+/// contrario deja la que calculo el juego (preferencia, nunca fuerza).
+#[no_mangle]
+pub unsafe extern "stdcall" fn p3esp_pref_ciudad(p_town: *mut u8) {
+    let pref = PREF_CIUDAD.load(Ordering::Relaxed);
+    if pref == 0xFF || pref >= MAX_SITES {
+        return;
+    }
+    let actual = *p_town;
+    if actual == pref {
+        return;
+    }
+    if ciudad_ya_fundada(pref) {
+        AVISA_PREF.call_once(|| {
+            log_info(&format!(
+                "mod-refresco-misiones: ciudad preferida {}({}) ya fundada; \
+                 se usa la que calcula el juego",
+                pref,
+                nombre_ciudad(pref)
+            ));
+        });
+        return;
+    }
+    *p_town = pref;
+    // byte de id en +1, igual que hace 0x00533D91 (tabla 0x673D60[ciudad]).
+    *p_town.add(1) = *((TOWN_ID_TABLE_ADDR + pref as u32) as *const u8);
 }
 
 /// Vuelca las tareas vivas (opcode 0x85) del contenedor inline del gestor:
@@ -307,6 +429,16 @@ unsafe fn apply_hook() -> bool {
     }
     let mut c = Cave { p, n: 0 };
 
+    // ciudad preferida: si aplica, pisa [esp+0x58]/[esp+0x59] ANTES de
+    // loguear, para que el logger ya vea la ciudad realmente ofrecida.
+    // lea eax,[esp+0x58]; push eax; call p3esp_pref_ciudad (stdcall RET 4).
+    c.push(&[0x8D, 0x44, 0x24, 0x58]); // lea eax,[esp+0x58]
+    c.push(&[0x50]); // push eax
+    let rel_pref = (p3esp_pref_ciudad as usize as u32)
+        .wrapping_sub(cave_addr + c.len() as u32 + 5);
+    c.push(&[0xE8]);
+    c.push(&rel_pref.to_le_bytes());
+
     // logger(due, tipo, mask, town) - stdcall RET 16; args en orden inverso.
     // En este punto ESP = frame del generador:
     //   town=[esp+0x58] mask=[esp+0x54] tipo=[esp+0x50] due=[esp+0x4C]
@@ -437,6 +569,15 @@ static STARTED: Once = Once::new();
 pub unsafe extern "C" fn start() -> u32 {
     let mut ok = true;
     STARTED.call_once(|| {
+        if let Some(ciudad) = cfg_ciudad_pref() {
+            PREF_CIUDAD.store(ciudad, Ordering::Relaxed);
+            log_info(&format!(
+                "mod-refresco-misiones: ciudad preferida {}({}) para la mision de fundar; \
+                 si ya esta fundada se usa la calculada por el juego",
+                ciudad,
+                nombre_ciudad(ciudad)
+            ));
+        }
         if apply_hook() {
             log_info(
                 "mod-refresco-misiones: observando la mision de fundar ciudad; \

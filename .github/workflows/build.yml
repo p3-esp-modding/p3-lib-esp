@@ -96,7 +96,7 @@ jobs:
             p3-esp-dlls.zip
             p3_esp_mods.cfg
 
-      - name: Prune old releases (keep 8 per branch)
+      - name: Prune old releases (keep 5 per branch)
         if: github.event_name == 'push'
         shell: bash
         env:
@@ -108,7 +108,7 @@ jobs:
           i=0
           for t in "${TAGS[@]}"; do
             i=$((i+1))
-            if [ "$i" -gt 8 ]; then
+            if [ "$i" -gt 5 ]; then
               gh release delete "$t" --cleanup-tag --yes
             fi
           done
