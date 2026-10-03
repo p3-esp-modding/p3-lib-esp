@@ -41,6 +41,13 @@
 // + PUSH 0x10) por un JMP a la cave; la cave reejecuta esos bytes, loguea
 // y salta a 0x005341BA.
 //
+// TERCER HOOK (0x004F8C9F, tick diario): el guard ds:0x70299C decide si el
+// generador corre (0 = sin mision pendiente). Si el usuario cambia el cfg
+// ([fundacion] modo/productos o [misiones] ciudad), el helper firma el cfg
+// (p3_esp_firma.txt), resetea el guard a 0 y EN ESE MISMO tick el generador
+// recalcula con la config nueva (sin tener que jugar meses ni aceptar/cerrar
+// la mision).
+//
 // ===========================================================================
 // LA LECCION STDCALL (bug de la v1 de este mod, NO USAR builds antiguas)
 // ===========================================================================
@@ -129,12 +136,27 @@ const MAX_SITES: u8 = 0x28; // 40 emplazamientos (cmp de FUN_00516FC0)
 static PREF_CIUDAD: AtomicU8 = AtomicU8::new(0xFF);
 static AVISA_PREF: Once = Once::new();
 
+/// 0x004F8C9F: `mov eax,[0x70299C]` en el tick diario, justo ANTES del test
+/// que decide si el generador corre (0x4F8CA4 test eax,eax; jne skip).
+/// Bytes: A1 9C 29 70 00. Verificado: ningun salto aterriza en
+/// 0x4F8C9F..0x4F8CA4. La cave llama al helper (firma del cfg) y relee el
+/// guard, asi que si el cfg cambio, el MISMO tick regenera las misiones.
+const HOOK3_RVA: u32 = 0x000F8C9F;
+const HOOK3_EXPECTED: [u8; 5] = [0xA1, 0x9C, 0x29, 0x70, 0x00];
+const HOOK3_CONT: u32 = 0x004F8CA4;
+/// Cave3: pushfd/pushad/call helper/popad/popfd/mov eax,[guard]/jmp 0x4F8CA4.
+const CAVE3_SIZE: usize = 19;
+
 unsafe fn hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK_RVA) as *const u8, 5) == HOOK_EXPECTED
 }
 
 unsafe fn hook2_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + HOOK2_RVA) as *const u8, 5) == HOOK2_EXPECTED
+}
+
+unsafe fn hook3_target_matches() -> bool {
+    std::slice::from_raw_parts((IMAGE_BASE + HOOK3_RVA) as *const u8, 5) == HOOK3_EXPECTED
 }
 
 // ---------- config ----------
@@ -191,6 +213,57 @@ fn cfg_ciudad_pref() -> Option<u8> {
             None
         }
     }
+}
+
+// ---------- firma del cfg (para forzar recalculo al cambiar config) ----------
+
+/// Claves que obligan a recalcular las misiones. Se concatenan y comparan con
+/// la ultima firma guardada en p3_esp_firma.txt (carpeta del juego).
+fn cfg_firma() -> String {
+    let modo = read_cfg_value("fundacion", "modo").unwrap_or_default();
+    let prods = read_cfg_value("fundacion", "productos").unwrap_or_default();
+    let ciudad = read_cfg_value("misiones", "ciudad").unwrap_or_default();
+    format!("{}|{}|{}", modo.trim(), prods.trim(), ciudad.trim())
+}
+
+const FIRMA_FILE: &str = "p3_esp_firma.txt";
+
+fn firma_guardada() -> String {
+    std::fs::read_to_string(FIRMA_FILE).unwrap_or_default()
+}
+
+/// Llamada desde la cave3 (tick diario, ANTES del test del guard).
+/// Si el cfg cambio respecto a la ultima firma guardada, resetea el guard
+/// 0x70299C (0 = sin mision pendiente => el generador puede correr) y guarda
+/// la firma nueva. El MISMO tick vuelve a leer el guard y regenera.
+/// Se limita a 1 lectura de cfg por segundo real (el tick corre 256 veces
+/// por dia de juego).
+#[no_mangle]
+pub unsafe extern "C" fn p3esp_tick_guard() {
+    let ahora = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as u64)
+        .unwrap_or(0);
+    static ULT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let ult = ULT.load(Ordering::Relaxed);
+    if ahora.saturating_sub(ult) < 1 {
+        return;
+    }
+    if ULT.compare_exchange(ult, ahora, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        return;
+    }
+    let firma = cfg_firma();
+    if firma == firma_guardada() {
+        return;
+    }
+    // Cambio detectado (o primera vez): resetear el guard y guardar firma.
+    *((0x70299Cusize) as *mut u32) = 0;
+    let _ = std::fs::write(FIRMA_FILE, &firma);
+    log_info(&format!(
+        "mod-refresco-misiones: config cambiada ({}); guard 0x70299C reseteado, \
+         el generador recalcula las misiones",
+        firma
+    ));
 }
 
 // ---------- logger (stdcall, la cave la llama con 4 args) ----------
@@ -561,6 +634,66 @@ unsafe fn apply_hook2() -> bool {
     true
 }
 
+/// Tercer hook: 0x004F8C9F (mov eax,[0x70299C] del tick diario). La cave:
+///   pushfd; pushad; call p3esp_tick_guard (cdecl); popad; popfd;
+///   mov eax,[0x70299C]; jmp 0x4F8CA4
+/// Si el helper reseteo el guard, la relectura hace que el generador corra
+/// EN ESTE MISMO tick (el test eax,eax de 0x4F8CA4 ve 0).
+unsafe fn apply_hook3() -> bool {
+    if !hook3_target_matches() {
+        log_error("mod-refresco-misiones: bytes en 0x004F8C9F no compatibles");
+        return false;
+    }
+    let cave = VirtualAlloc(None, CAVE3_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if cave.is_null() {
+        log_error("mod-refresco-misiones: VirtualAlloc cave3 devolvio NULL");
+        return false;
+    }
+    let cave_addr = cave as u32;
+    let p = cave as *mut u8;
+
+    let helper = p3esp_tick_guard as usize as u32;
+    let rel_call = helper.wrapping_sub(cave_addr + 2 + 5);
+    let mut i = 0usize;
+    let put = |p: *mut u8, i: &mut usize, bytes: &[u8]| unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(*i), bytes.len());
+        *i += bytes.len();
+    };
+    put(p, &mut i, &[0x9C]); // pushfd
+    put(p, &mut i, &[0x60]); // pushad
+    put(p, &mut i, &[0xE8]); // call rel32 (offset 2)
+    put(p, &mut i, &rel_call.to_le_bytes());
+    put(p, &mut i, &[0x61]); // popad
+    put(p, &mut i, &[0x9D]); // popfd
+    put(p, &mut i, &[0xA1, 0x9C, 0x29, 0x70, 0x00]); // mov eax,[0x70299C]
+    let rel_jmp = HOOK3_CONT.wrapping_sub(cave_addr + i as u32 + 5);
+    put(p, &mut i, &[0xE9]); // jmp rel32 (offset 14)
+    put(p, &mut i, &rel_jmp.to_le_bytes());
+    if i != CAVE3_SIZE {
+        log_error("mod-refresco-misiones: tamano de cave3 desajustado (bug interno)");
+        return false;
+    }
+
+    let mut old = PAGE_PROTECTION_FLAGS(0);
+    if !VirtualProtect(cave as _, CAVE3_SIZE, PAGE_EXECUTE_READ, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: VirtualProtect cave3 fallo");
+        return false;
+    }
+    let patch = (IMAGE_BASE + HOOK3_RVA) as *mut u8;
+    let rel = cave_addr.wrapping_sub(IMAGE_BASE + HOOK3_RVA + 5);
+    if !VirtualProtect(patch as _, 5, PAGE_EXECUTE_READWRITE, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: VirtualProtect patch3 fallo");
+        return false;
+    }
+    *patch = 0xE9;
+    std::ptr::write_unaligned(patch.add(1) as *mut u32, rel);
+    if !VirtualProtect(patch as _, 5, old, &mut old).as_bool() {
+        log_error("mod-refresco-misiones: restaurar proteccion patch3 fallo");
+        return false;
+    }
+    true
+}
+
 // ---------- start() (contrato del modloader) -----------
 
 static STARTED: Once = Once::new();
@@ -592,6 +725,15 @@ pub unsafe extern "C" fn start() -> u32 {
             log_error(
                 "mod-refresco-misiones: hook2 (post-registro) NO instalado; \
                  solo se loguearan las generaciones, no los volcados del gestor",
+            );
+        }
+        // Hook3 (tick diario): detecta cambios del cfg y resetea el guard
+        // para recalcular sin jugar meses. Informativo: si falla, el mod
+        // sigue con hook1/hook2 (sin forzar recalculo).
+        if !apply_hook3() {
+            log_error(
+                "mod-refresco-misiones: hook3 (guard del tick) NO instalado; \
+                 los cambios de cfg NO forzaran recalculo hasta recargar partida",
             );
         }
     });
