@@ -269,6 +269,10 @@ fn cfg_ciudades_pref() -> Vec<u8> {
         if s.is_empty() {
             continue;
         }
+        let l = s.to_ascii_lowercase();
+        if l == "defecto" {
+            continue; // sin preferencia (valor por defecto del cfg)
+        }
         if let Ok(n) = s.parse::<u16>() {
             if n < MAX_SITES as u16 {
                 out.push(n as u8);
