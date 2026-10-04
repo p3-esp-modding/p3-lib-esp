@@ -310,7 +310,6 @@ def main():
         "mod-fullhd",
         "mod-limite-ciudades",
         "mod-mendigos-taberna",
-        "mod-refresco-misiones",
         "mod-satisfaccion-mendigos",
         "mod-fundacion",
     ]:
@@ -325,17 +324,26 @@ def main():
         if not found:
             print(f"[INFO] {mod}: sin apply_offset_patch (usa hook/cave)")
 
-    # mod-refresco-misiones: el JMP que sustituye su cave debe estar intacto
-    # en el exe original (0x005341B4: LEA ECX,[esp+0x4C] + PUSH 0x10, epilogo
-    # comun del generador de misiones FUN_00533CA0)
-    hook_off = 0x001341B4
-    expected_hook = bytes.fromhex("8D4C244C6A")
-    actual = exe[hook_off : hook_off + len(expected_hook)]
-    if actual == expected_hook:
-        print(f"OK   mod-refresco-misiones: epilogo en VA 0x{IMAGE_BASE + hook_off:08X} = {actual.hex()}")
-    else:
-        print(f"FAIL mod-refresco-misiones: epilogo en VA 0x{IMAGE_BASE + hook_off:08X} esperado {expected_hook.hex()}, real {actual.hex()}")
-        all_ok = False
+    # ---- mod-fundacion: puntos de hook (los bytes originales deben estar
+    # intactos en el exe del disco; el parcheo de JMP es en memoria) ----
+    for name, off, expected_hex in [
+        # epilogo del generador de misiones (hook de ciudad preferida)
+        ("epilogo misiones 0x005341B4", 0x001341B4, "8D4C244C6A"),
+        # tick diario: mov eax,[0x70299C] (hook de refresco=auto)
+        ("guard tick 0x004F8C9F", 0x000F8C9F, "A19C297000"),
+        # epilogo de FUN_005343f0 (hook de modo=3)
+        ("epilogo escasez 0x0053478A", 0x0013478A, "5F5E5D5B81"),
+    ]:
+        expected_hook = bytes.fromhex(expected_hex)
+        actual = exe[off : off + len(expected_hook)]
+        if actual == expected_hook:
+            print(f"OK   mod-fundacion: {name} = {actual.hex()}")
+        else:
+            print(
+                f"FAIL mod-fundacion: {name} esperado {expected_hook.hex()}, "
+                f"real {actual.hex()}"
+            )
+            all_ok = False
 
     # ---- modloader / dll-patcher ----
     print("\n### MODLOADER / DLL-PATCHER ###")

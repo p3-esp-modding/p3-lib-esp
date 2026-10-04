@@ -49,7 +49,6 @@ jobs:
           copy /Y target\i686-pc-windows-msvc\release\mod_fullhd.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_limite_ciudades.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_mendigos_taberna.dll output\mods\
-          copy /Y target\i686-pc-windows-msvc\release\mod_refresco_misiones.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_satisfaccion_mendigos.dll output\mods\
 
       - name: Zip output
@@ -77,7 +76,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
-          name: Pre-release ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
           prerelease: true
           make_latest: false
           files: |
@@ -89,14 +88,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.value }}
-          name: Stable ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
           prerelease: false
           make_latest: true
           files: |
             p3-esp-dlls.zip
             p3_esp_mods.cfg
 
-      - name: Prune old releases (keep 8 per branch)
+      - name: Prune old releases (keep 5 per branch)
         if: github.event_name == 'push'
         shell: bash
         env:
@@ -108,7 +107,7 @@ jobs:
           i=0
           for t in "${TAGS[@]}"; do
             i=$((i+1))
-            if [ "$i" -gt 8 ]; then
+            if [ "$i" -gt 5 ]; then
               gh release delete "$t" --cleanup-tag --yes
             fi
           done
