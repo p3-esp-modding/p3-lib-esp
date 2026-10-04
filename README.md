@@ -92,9 +92,11 @@ dos cuenta como uno.
 
 ## Nota para desarrolladores
 
-- Ramas: `main` (desarrollo), `pre-release` (compilaciones de prueba) y
-  `stable` (última versión buena). Cada push a `pre-release`/`stable` compila
-  en GitHub Actions y actualiza el release homónimo automáticamente.
+- Ramas: `main` (desarrollo, la única local), `pre-release` y `stable`
+  (solo en el remoto). Para publicar: `./subir-pre-release.sh` (build de
+  prueba) o `./subir-stable.sh` (release estable); ambos empujan `main` a la
+  rama correspondiente y disparan GitHub Actions, que compila y actualiza el
+  release homónimo.
 - Compilación local en Windows: `deploy.bat` (MSVC,
   `i686-pc-windows-msvc`) genera `output\`.
 - Tras tocar cualquier cave o parche, ejecutar `python3 verificar_mods.py
