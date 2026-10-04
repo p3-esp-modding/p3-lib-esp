@@ -49,7 +49,6 @@ jobs:
           copy /Y target\i686-pc-windows-msvc\release\mod_fullhd.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_limite_ciudades.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_mendigos_taberna.dll output\mods\
-          copy /Y target\i686-pc-windows-msvc\release\mod_refresco_misiones.dll output\mods\
           copy /Y target\i686-pc-windows-msvc\release\mod_satisfaccion_mendigos.dll output\mods\
 
       - name: Zip output

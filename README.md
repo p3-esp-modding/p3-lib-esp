@@ -59,8 +59,7 @@ juego). Si algo falla al arrancar, míralo ahí primero.
 | `mod_limite_ciudades.dll` | La misión del gobernador permite fundar hasta 36 ciudades (antes 26). |
 | `mod_mendigos_taberna.dll` | La taberna acepta hasta 100 marineros (antes 50). |
 | `mod_satisfaccion_mendigos.dll` | Ajusta la satisfacción de los mendigos (4 → 3). |
-| `mod_fundacion.dll` | Ciudad fundada: corrige los 3 productos más escasos (antes salían mal por un error del juego) y opcionalmente da 4 productos o una lista personalizada. Ver `[fundacion]` abajo. |
-| `mod_refresco_misiones.dll` | Observa las misiones del gobernador y las registra en `misiones_log.txt`. Opción experimental de acortar plazos (ver `[misiones]`). |
+| `mod_fundacion.dll` | Ciudad fundada: corrige los 3 productos más escasos (antes salían mal por un error del juego) y opcionalmente da 4 productos, una lista personalizada, ciudad preferida para la misión y recálculo al cambiar la config. Ver `[fundacion]` abajo. |
 | `mod_catedral_crash.dll` | Corrige el crash al abrir la catedral tras recargar partida (tabla de texturas no reinicializada). |
 
 ## Configuración
@@ -77,11 +76,13 @@ lo necesitan. Ejemplo:
 modo=2
 productos=grano,madera,cerveza,vino,miel
 
-[misiones]
-#   modo=loguear  (RECOMENDADO) solo registra en misiones_log.txt, no cambia nada.
-#   modo=acortar  EXPERIMENTAL: reescribe la fecha de la misión de fundar ciudad.
-modo=loguear
-fundarCiudadMeses=3
+# Ciudad preferida para la misión de fundar (lista en orden; se usa la
+# primera que no esté fundada, si no la que calcula el juego):
+#ciudad=memel,windau,konigsberg
+
+# refresco=auto  los cambios en [fundacion] recalculan la misión al instante
+# refresco=defecto (o ausente) el juego gestiona el ciclo como siempre
+refresco=defecto
 ```
 
 Productos válidos para `modo=3`: grano, madera, cerveza, vino, miel, pescado,

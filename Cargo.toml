@@ -9,7 +9,6 @@ members = [
     "mod-fullhd",
     "mod-limite-ciudades",
     "mod-mendigos-taberna",
-    "mod-refresco-misiones",
     "mod-satisfaccion-mendigos",
     "p3-esp-dll-patcher",
 ]

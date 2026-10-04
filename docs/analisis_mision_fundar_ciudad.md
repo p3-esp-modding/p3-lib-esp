@@ -187,36 +187,31 @@ tabla_0x673D88[mes]*256`; la fórmula es exacta: due = 1er día de `ahora+N`):
 **La fecha calculada va en el registro de 20 bytes (tipo `0x85`) del gestor
 `0x702970`** y se serializa en el save.
 
-### Semántica de la fecha: NO cerrada estáticamente
+### Semántica de la fecha: CONFIRMADA en juego = PLAZO
 
-Dos hipótesis:
-- (A) es la fecha en que la misión **se ofrece** (el "refresco" tarda N meses).
-- (B) es el **plazo para cumplirla** una vez aceptada (los 25/3/7 meses
-  coinciden con los plazos que el juego da al aceptar, y el renderizador de
-  cartas `0x4A5DEF` + handler `0x4AAE50` formatea cartas de misión fechadas:
-  "Honorable..., tu entrega nos ha sido de gran ayuda...").
-
-La evidencia disponible se inclina hacia (B), pero el dispatcher de cartas y
-el de tareas no se han distinguido del todo estáticamente. **El mod
-`mod-refresco-misiones` en modo `loguear` escribe `misiones_log.txt` con la
-fecha, máscara y ciudad de cada misión generada**: jugando una sesión y
-comparando con lo que muestra el juego (cuándo aparece la misión en la
-oficina vs. la fecha límite al aceptarla) se cierra la cuestión sin riesgo.
+Confirmado con logs reales (`misiones_log.txt` con los hooks de registro) y
+jugando: al aceptar la misión de fundar el juego da 25 meses para cumplirla.
+La fecha que calcula el generador ES ese plazo; además la oferta se
+**regenera a diario** mientras el guard esté a 0 (ciudad/productos pueden
+cambiar si cambia la escasez de la Hansa), de ahí que la fecha vista en el
+log salte de mes en mes.
 
 ### Lo que sí es sólido: el guard del tick diario
 
 El generador solo corre en el tick diario (`0x004F8CAD`) si `ds:0x70299C == 0`
 (sin misión de almirantazgo activa/pendiente). Ese guard — no la fecha — es el
-candidato principal al "tardo en refrescar": mientras haya una misión activa,
-no se generan nuevas ofertas.
+"freno": mientras sea ≠0 no se generan nuevas ofertas (hasta que la aceptada
+se cumpla, caduque o fracase). Con `refresco=auto` (mod-fundacion) un hook en
+`0x004F8C9F` resetea el guard cuando cambia el cfg, forzando el recálculo.
 
 ### El mod y la lección stdcall
 
-- `mod-refresco-misiones` hookea el **epílogo común `0x005341B4`** del
-  generador (captura las 5 misiones): payload en `[esp+0x4C]` = fecha `+0`,
-  tipo `+4`, máscara `+8`, ciudad `+0xC`. La cave reejecuta los bytes
-  desplazados (`LEA ECX,[esp+0x4C]; PUSH 0x10`), llama al logger
-  `p3esp_mision_log` (stdcall RET 16) y salta a `0x5341BA`.
+- `mod-fundacion` (que absorbió a `mod-refresco-misiones`) hookea el
+  **epílogo común `0x005341B4`** del generador (5 misiones): payload en
+  `[esp+0x4C]` = fecha `+0`, tipo `+4`, máscara `+8`, ciudad `+0xC`. La cave
+  (21 bytes) reejecuta los bytes desplazados (`LEA ECX,[esp+0x4C]; PUSH 0x10`),
+  aplica la ciudad preferida (`p3esp_pref_ciudad`, stdcall RET 4, cascada de
+  hasta 8 ciudades no fundadas) y salta a `0x5341BA`.
 - **Lección (v1 del mod era un no-op/crasheo latente):** `FUN_005343F0` es
   **stdcall** (`RET 8` en `0x534794`, limpia sus 2 args). NO se puede hookear
   su call-site `0x533D7E` con una cave que haga `call fun; ...; ret 8`: el
@@ -224,10 +219,10 @@ no se generan nuevas ofertas.
   resto de la cave) y el `ret` final de la cave salta a basura. Regla: al
   hookear la call a una stdcall, reejecutar los bytes desplazados y saltar
   detrás (o gestionar la dirección de retorno a mano).
-- En modo `acortar` (EXPERIMENTAL) la cave reescribe `[esp+0x4C]` con
-  `ahora + N meses` solo cuando tipo==0 (fundar ciudad). No tocar el
-  inmediato `0x19` en `0x00533D33` con 1 byte salvo N≥12 (la división mágica
-  exige `mes+N≥13` y `INC EDX` fuerza ≥1 año).
+- El modo `acortar` (reescritura de `[esp+0x4C]` en la cave) fue eliminado;
+  si algún día se retoma: no tocar el inmediato `0x19` en `0x00533D33` con
+  1 byte salvo N≥12 (la división mágica exige `mes+N≥13` y `INC EDX` fuerza
+  ≥1 año).
 
 ## Tabla de direcciones nuevas (exe español)
 

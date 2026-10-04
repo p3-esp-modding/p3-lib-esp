@@ -17,8 +17,8 @@ repo separado: `p3-esp-static-patcher` (respaldo, ya no es el enfoque).
 ### Mods DLL (ENFOQUE PRINCIPAL)
 - Workspace con los mods como DLLs: `p3-esp-modloader`, `p3-esp-modlib`,
   `mod-fullhd`, `mod-limite-ciudades`, `mod-mendigos-taberna`,
-  `mod-satisfaccion-mendigos`, `mod-catedral-crash`, `mod-fundacion`,
-  `mod-refresco-misiones`.
+  `mod-satisfaccion-mendigos`, `mod-catedral-crash`, `mod-fundacion`
+  (absorbió `mod-refresco-misiones`: ciudad preferida + refresco auto).
 - `p3-esp-dll-patcher/`: añade el import de `p3_esp_modloader.dll`
   al exe para que el modloader se cargue (binario `p3_esp_dll_patcher`).
 - Los mods usan **offsets absolutos + VirtualProtect** (estilo inglés), ver
@@ -77,21 +77,28 @@ reanuda la estrategia DLL con límites seguros.
 Ambos requieren runtime (no se hornean), por eso viven como DLLs en
 `p3-esp-dll-patcher/`. Datos clave extraídos del análisis previo:
 
-### mod-refresco-misiones (observador de misiones de gobernador)
+### Misiones de gobernador (ahora en `mod-fundacion`)
 - El generador de misiones de almirantazgo es `FUN_00533CA0` (ECX=GameWorld
   `0x701B20`); 5 casos con jump table en `0x5341FC` (caso 0 = fundar ciudad en
   `0x533D1C`, que contiene el check `cmp [world+0x10],0x1A` del límite de 26).
 - Corre al iniciar partida (`0x5E1BF5`) y en el tick diario (`0x4F8CAD`) SOLO
-  si `ds:0x70299C == 0` (sin misión de almirantazgo activa). Genera 1 misión
-  por tipo; cada una lleva una fecha = 1º de (ahora + N meses): fundar 25
-  (`ADD ECX,0x19` imm en `0x533D33`), pirata 3, esconderijo 7.
-- **Semántica de esa fecha NO cerrada**: ¿fecha de oferta o plazo para
-  cumplirla? (las cartas del juego y el UI que pinta mes+25 apuntan a plazo).
-  El mod por defecto (modo=loguear) escribe `misiones_log.txt` para cerrarlo
-  jugando; modo=acortar (EXPERIMENTAL) reescribe la fecha del caso fundar.
-- El mod hookea el epílogo común `0x5341B4` (payload en `[esp+0x4C]`: fecha
-  `+0`, tipo `+4`, máscara `+8`, ciudad `+0xC`). Cave llama al logger
-  `p3esp_mision_log` (stdcall, RET 16) y salta a `0x5341BA`.
+  si `ds:0x70299C == 0` (guard "sin misión de almirantazgo pendiente"). Genera
+  1 misión por tipo; cada una lleva una fecha = 1º de (ahora + N meses): fundar
+  25 (`ADD ECX,0x19` imm en `0x533D33`), pirata 3, esconderijo 7.
+- **Semántica de la fecha CONFIRMADA en juego: es el PLAZO** (25 meses al
+  aceptar; la oferta se regenera mientras el guard esté a 0).
+- Layout del gestor `0x702970` (VERIFICADO en runtime): count `u16` en `+0x56`,
+  tareas inline en `+0x58` stride `0x14` (opcode `u32` 0x85 = misión,
+  payload+4 = due, +8 tipo, +0xC máscara, +0x10 ciudad). El struct inglés no
+  cuadra en el exe español.
+- `mod-fundacion` hookea el epílogo común `0x5341B4` (payload en
+  `[esp+0x4C]`: fecha `+0`, tipo `+4`, máscara `+8`, ciudad `+0xC`): cave de
+  21 bytes que aplica la ciudad preferida (`p3esp_pref_ciudad`, stdcall) y
+  salta a `0x5341BA`. Con `refresco=auto`, otro hook en `0x4F8C9F`
+  (mov eax,[guard] del tick, cave de 19 bytes) resetea el guard si cambió el
+  cfg (firma en `p3_esp_firma.txt`).
+- El antiguo módulo `mod-refresco-misiones` (log a `misiones_log.txt`,
+  volcado del gestor, modos acortar/loguear) fue **eliminado y absorbido**.
 - **Lección stdcall**: `FUN_005343F0` es stdcall (`RET 8` en `0x534794`).
   Hookear su call-site `0x533D7E` con "call fun; ...; ret 8" NO funciona: el
   ret 8 de la fun regresa directo a la call-site y el ret de la cave salta a
@@ -165,7 +172,8 @@ Ambos requieren runtime (no se hornean), por eso viven como DLLs en
 - `p3-esp-dll-patcher/` — patcher del modloader (añade el import).
 - `p3-esp-modlib/src/lib.rs` — `apply_offset_patch` (VA
   absoluto + VirtualProtect), `apply_patches` (find/replace).
-- `verificar_mods.py` — verificación de TODOS los mods: code caves
+- `verificar_mods.py` — verificación de TODOS los m (confirmada: plazo) y
+  ciudad preferida
   (reconstruye los bytes y los desensambla con objdump, comprobando cada
   salto y que el buffer cubre el último rel32) + parches de bytes contra
   `Patrician3_original.exe` (expected/find de los mods DLL, static patcher,
