@@ -112,18 +112,6 @@ pub unsafe extern "C" fn rust_init_table(obj: *mut u8) {
         return;
     }
 
-    // Diagnostico temporal: contar cuantas veces se re-asigna la tabla en
-    // una sesion. Si este numero crece mucho, la catedral esta filtrando
-    // memoria de forma acumulativa (posible causa de corrupcion tardia).
-    static INIT_COUNT: AtomicU32 = AtomicU32::new(0);
-    let n = INIT_COUNT.fetch_add(1, Ordering::Relaxed);
-    if n == 0 || (n + 1) % 50 == 0 {
-        log_info(&format!(
-            "mod-catedral-crash: rust_init_table usos en esta sesion = {}",
-            n + 1
-        ));
-    }
-
     let alloc: unsafe extern "C" fn(usize) -> *mut u8 = std::mem::transmute(GAME_ALLOC_VA);
     let table = alloc(TABLE_BYTES);
     if table.is_null() {

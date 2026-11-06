@@ -297,7 +297,7 @@ fn find_exe(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-fn main() {
+fn run() -> i32 {
     let args: Vec<String> = env::args().collect();
     let dir = if args.len() > 1 {
         PathBuf::from(&args[1])
@@ -307,7 +307,7 @@ fn main() {
 
     if !dir.is_dir() {
         println!("[ERROR] No es un directorio: {}", dir.display());
-        std::process::exit(1);
+        return 1;
     }
 
     // Decidir entrada/salida
@@ -321,8 +321,8 @@ fn main() {
             Some(e) => (e, dir.join("Patrician3_modloader.exe")),
             None => {
                 println!("[ERROR] No se encuentra Patrician3.exe en {}", dir.display());
-                println!("        Usa: p3-esp-patcher.exe <directorio_del_juego>");
-                std::process::exit(1);
+                println!("        Abre este programa desde la carpeta del juego.");
+                return 1;
             }
         }
     };
@@ -334,7 +334,7 @@ fn main() {
         Ok(d) => d,
         Err(e) => {
             println!("[ERROR] No se pudo leer {}: {}", input.display(), e);
-            std::process::exit(1);
+            return 1;
         }
     };
 
@@ -345,11 +345,14 @@ fn main() {
             "[ERROR] {} no encontrado junto al EXE; no se genera una salida sin parchear",
             MODLOADER_DLL
         );
-        std::process::exit(1);
+        return 1;
     }
     if !add_dll_import(&mut exe_data, MODLOADER_DLL, MODLOADER_FUNC) {
         println!("[ERROR] No se pudo anadir el import de {}", MODLOADER_DLL);
-        std::process::exit(1);
+        println!(
+            "        Comprueba que Patrician3.exe es el ejecutable espanol original."
+        );
+        return 1;
     }
     println!("[OK] Import de {} anadido", MODLOADER_DLL);
 
@@ -357,7 +360,19 @@ fn main() {
         Ok(_) => println!("[OK] Generado: {}", output.display()),
         Err(e) => {
             println!("[ERROR] No se pudo escribir {}: {}", output.display(), e);
-            std::process::exit(1);
+            return 1;
         }
     }
+    0
+}
+
+fn main() {
+    let code = run();
+    // Si se abrio con doble clic (sin argumentos), dejar ver el resultado.
+    if env::args().len() <= 1 {
+        println!();
+        println!("Pulsa una tecla para cerrar...");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+    std::process::exit(code);
 }

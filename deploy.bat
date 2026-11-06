@@ -54,7 +54,7 @@ echo   2. Copia output\p3_esp_modloader.dll a la carpeta del juego
 echo   3. Copia a la carpeta del juego los mods que quieras de output\mods,
 echo      metiendolos dentro de la subcarpeta mods\ del juego (o creandola):
 echo        mod_catedral_crash.dll        - fix catedral
-echo        mod_fundacion.dll              - ciudad fundada: productos, ciudad y refresco
+echo        mod_fundacion.dll              - ciudad fundada: productos y ciudad
 echo        mod_fullhd.dll                 - resolucion 1920x1080
 echo        mod_limite_ciudades.dll        - limite 36 ciudades
 echo        mod_mendigos_taberna.dll       - taberna hasta 100 marineros

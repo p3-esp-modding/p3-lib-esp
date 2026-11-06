@@ -18,7 +18,7 @@ repo separado: `p3-esp-static-patcher` (respaldo, ya no es el enfoque).
 - Workspace con los mods como DLLs: `p3-esp-modloader`, `p3-esp-modlib`,
   `mod-fullhd`, `mod-limite-ciudades`, `mod-mendigos-taberna`,
   `mod-satisfaccion-mendigos`, `mod-catedral-crash`, `mod-fundacion`
-  (absorbió `mod-refresco-misiones`: ciudad preferida + refresco auto).
+  (absorbió `mod-refresco-misiones`: ciudad preferida).
 - `p3-esp-dll-patcher/`: añade el import de `p3_esp_modloader.dll`
   al exe para que el modloader se cargue (binario `p3_esp_dll_patcher`).
 - Los mods usan **offsets absolutos + VirtualProtect** (estilo inglés), ver
@@ -94,11 +94,10 @@ Ambos requieren runtime (no se hornean), por eso viven como DLLs en
 - `mod-fundacion` hookea el epílogo común `0x5341B4` (payload en
   `[esp+0x4C]`: fecha `+0`, tipo `+4`, máscara `+8`, ciudad `+0xC`): cave de
   21 bytes que aplica la ciudad preferida (`p3esp_pref_ciudad`, stdcall) y
-  salta a `0x5341BA`. Con `refresco=auto`, otro hook en `0x4F8C9F`
-  (mov eax,[guard] del tick, cave de 19 bytes) resetea el guard si cambió el
-  cfg (firma en `p3_esp_firma.txt`).
+  salta a `0x5341BA`.
 - El antiguo módulo `mod-refresco-misiones` (log a `misiones_log.txt`,
-  volcado del gestor, modos acortar/loguear) fue **eliminado y absorbido**.
+  volcado del gestor, modos acortar/loguear) fue **eliminado y absorbido**
+  (solo la ciudad preferida; el log y el refresco forzado se quitaron).
 - **Lección stdcall**: `FUN_005343F0` es stdcall (`RET 8` en `0x534794`).
   Hookear su call-site `0x533D7E` con "call fun; ...; ret 8" NO funciona: el
   ret 8 de la fun regresa directo a la call-site y el ret de la cave salta a
@@ -172,15 +171,14 @@ Ambos requieren runtime (no se hornean), por eso viven como DLLs en
 - `p3-esp-dll-patcher/` — patcher del modloader (añade el import).
 - `p3-esp-modlib/src/lib.rs` — `apply_offset_patch` (VA
   absoluto + VirtualProtect), `apply_patches` (find/replace).
-- `verificar_mods.py` — verificación de TODOS los m (confirmada: plazo) y
-  ciudad preferida
+- `verificar_mods.py` — verificación de TODOS los mods: code caves
   (reconstruye los bytes y los desensambla con objdump, comprobando cada
   salto y que el buffer cubre el último rel32) + parches de bytes contra
   `Patrician3_original.exe` (expected/find de los mods DLL, static patcher,
   modloader/dll-patcher). Uso: `python3 verificar_mods.py`.
 - `DIRECCIONES_EXE_ESPANOL.md` — registro de direcciones del exe español.
 - `analisis_mision_fundar_ciudad.md` — análisis del generador de misiones
-  de gobernador (FUN_00533CA0), semántica de fechas, y mod refresco.
+  de gobernador (FUN_00533CA0) y semántica de fechas.
 - `Patrician3_fullhd.exe` — exe de la comunidad con fullhd horneado.
 
 ## Referencia de la comunidad inglesa

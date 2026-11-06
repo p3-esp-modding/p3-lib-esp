@@ -55,14 +55,6 @@
 //     ninguna esta disponible, la que calcula el juego. Por defecto: ninguna.
 //     Se lee al arrancar; un hook en el epilogo del generador (0x005341B4,
 //     cave de 21 bytes) la aplica justo antes de empaquetar la mision.
-//   refresco = auto | defecto (DEFAULT). Con "auto", si cambias cualquier
-//     clave de [fundacion] con el juego abierto, un hook en el tick diario
-//     (0x004F8C9F, cave de 19 bytes) detecta el cambio (firma en
-//     p3_esp_firma.txt), resetea el guard 0x70299C y EN ESE MISMO tick el
-//     generador recalcula la mision con la config nueva (sin jugar meses).
-//     "defecto": el juego gestiona el ciclo de la mision como siempre.
-//     refresco se lee al arrancar; los cambios de modo/productos/ciudad
-//     con "auto" se aplican sin reiniciar.
 //
 // Los errores se escriben en Patrician3_modloader.log (via p3-esp-modlib).
 
@@ -87,10 +79,6 @@ unsafe fn force_hook_target_matches() -> bool {
 
 unsafe fn mi_hook_target_matches() -> bool {
     std::slice::from_raw_parts((IMAGE_BASE + MI_HOOK_RVA) as *const u8, 5) == MI_HOOK_EXPECTED
-}
-
-unsafe fn guard_hook_target_matches() -> bool {
-    std::slice::from_raw_parts((IMAGE_BASE + GUARD_HOOK_RVA) as *const u8, 5) == GUARD_HOOK_EXPECTED
 }
 
 // ---------- config ----------
@@ -205,7 +193,7 @@ fn compute_forced_mask() -> u32 {
     }
 }
 
-// ---------- ciudad preferida + refresco auto (absorbidos de mod-refresco-misiones) ----------
+// ---------- ciudad preferida para la mision de fundar ----------
 
 /// 0x005341B4: epilogo comun del generador de misiones FUN_00533CA0.
 /// Bytes originales: 8D 4C 24 4C 6A (LEA ECX,[esp+0x4C] + PUSH 0x10).
@@ -217,23 +205,12 @@ const MI_HOOK_CONT: u32 = 0x005341BA;
 /// + LEA ECX,[esp+0x4C] (4) + PUSH 0x10 (2) + jmp (5) = 21 bytes.
 const MI_CAVE_SIZE: usize = 21;
 
-/// 0x004F8C9F: `mov eax,[0x70299C]` en el tick diario, justo ANTES del test
-/// que decide si el generador corre (0x4F8CA4 test eax,eax). Bytes:
-/// A1 9C 29 70 00. Verificado: ningun salto aterriza en 0x4F8C9F..0x4F8CA4.
-const GUARD_HOOK_RVA: u32 = 0x000F8C9F;
-const GUARD_HOOK_EXPECTED: [u8; 5] = [0xA1, 0x9C, 0x29, 0x70, 0x00];
-const GUARD_HOOK_CONT: u32 = 0x004F8CA4;
-/// Cave: pushfd/pushad/call helper/popad/popfd/mov eax,[guard]/jmp = 19 bytes.
-const GUARD_CAVE_SIZE: usize = 19;
-
 /// world+0x10 = towns_count (u32), world+0x18 = ids de ciudades fundadas (u8),
 /// tabla ciudad->id de la mision (byte [ciudad] en 0x673D60).
 const WORLD_TOWNS_COUNT_ADDR: u32 = 0x00701B30;
 const WORLD_TOWN_IDS_ADDR: u32 = 0x00701B38;
 const TOWN_ID_TABLE_ADDR: u32 = 0x00673D60;
 const MAX_SITES: u8 = 0x28; // 40 emplazamientos (cmp de FUN_00516FC0)
-/// Guard del tick: 0 = sin mision pendiente => el generador puede correr.
-const GUARD_ADDR: usize = 0x70299C;
 
 /// [fundacion] ciudad = lista ordenada de hasta 8, probada en cascada
 /// (primera no fundada gana). 0xFF = fin de lista.
@@ -305,28 +282,6 @@ fn guardar_prefs(prefs: &[u8]) {
     }
 }
 
-/// [fundacion] refresco = auto (activa el recalculo al cambiar el cfg).
-/// Cualquier otra cosa (o la clave ausente) = defecto (el juego gestiona).
-fn cfg_refresco_auto() -> bool {
-    let v = match read_cfg_value("fundacion", "refresco") {
-        Some(v) => v,
-        None => return false,
-    };
-    let s = v.trim().to_ascii_lowercase();
-    match s.as_str() {
-        "auto" | "si" | "recalculo" => true,
-        "defecto" | "pordefecto" | "off" | "no" | "" => false,
-        _ => {
-            log_error(&format!(
-                "mod-fundacion: refresco=\"{}\" no reconocido (auto|defecto); \
-                 se usa defecto",
-                v.trim()
-            ));
-            false
-        }
-    }
-}
-
 /// Ciudades ocupadas: replica el filtro de FUN_00516FC0 (ids de la tabla
 /// world+0x18 y ids de las ciudades con oficina de los 5 merchants).
 fn ciudad_ya_fundada(id: u8) -> bool {
@@ -386,67 +341,6 @@ pub unsafe extern "stdcall" fn p3esp_pref_ciudad(p_town: *mut u8) {
             );
         });
     }
-}
-
-/// Firma de la config relevante para las misiones (para refresco=auto).
-fn cfg_firma() -> String {
-    let modo = read_cfg_value("fundacion", "modo").unwrap_or_default();
-    let prods = read_cfg_value("fundacion", "productos").unwrap_or_default();
-    let ciudad = read_cfg_value("fundacion", "ciudad").unwrap_or_default();
-    let refresco = read_cfg_value("fundacion", "refresco").unwrap_or_default();
-    format!(
-        "{}|{}|{}|{}",
-        modo.trim(),
-        prods.trim(),
-        ciudad.trim(),
-        refresco.trim()
-    )
-}
-
-/// Firma de la ultima config vista (por refresco=auto).
-const FIRMA_FILE: &str = "p3_esp_firma.txt";
-
-fn firma_guardada() -> String {
-    fs::read_to_string(FIRMA_FILE).unwrap_or_default()
-}
-
-/// Llamada desde la cave del tick diario (refresco=auto), ANTES del test del
-/// guard. Si el cfg cambio respecto a la ultima firma guardada: guarda la
-/// firma, refresca la lista de ciudades y resetea el guard 0x70299C (0 =
-/// sin mision pendiente). La cave relee el guard y EN ESE MISMO tick el
-/// generador recalcula con la config nueva. Limitado a 1 lectura/segundo
-/// real (el tick corre 256 veces por dia de juego).
-#[no_mangle]
-pub unsafe extern "C" fn p3esp_tick_guard() {
-    let ahora = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    static ULT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
-    let ult = ULT.load(std::sync::atomic::Ordering::Relaxed);
-    if ahora.saturating_sub(ult) < 1 {
-        return;
-    }
-    if ULT
-        .compare_exchange(ult, ahora, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed)
-        .is_err()
-    {
-        return;
-    }
-    let firma = cfg_firma();
-    if firma == firma_guardada() {
-        return;
-    }
-    // Cambio detectado (o primera vez): refrescar prefs, resetear el guard
-    // y guardar la firma.
-    guardar_prefs(&cfg_ciudades_pref());
-    *(GUARD_ADDR as *mut u32) = 0;
-    let _ = fs::write(FIRMA_FILE, &firma);
-    log_info(&format!(
-        "mod-fundacion: config cambiada ({}); guard 0x70299C reseteado, \
-         el generador recalcula la mision",
-        firma
-    ));
 }
 
 // ---------- hook epilogo (asm puro) ----------
@@ -565,65 +459,6 @@ unsafe fn apply_hook_ciudad() -> bool {
     true
 }
 
-/// Cave en el tick diario (0x004F8C9F) que detecta cambios del cfg y
-/// resetea el guard (refresco=auto):
-///   pushfd; pushad; call p3esp_tick_guard (cdecl); popad; popfd;
-///   mov eax,[0x70299C]; jmp 0x004F8CA4
-unsafe fn apply_hook_guard() -> bool {
-    if !guard_hook_target_matches() {
-        log_error("mod-fundacion: bytes en 0x004F8C9F no compatibles");
-        return false;
-    }
-    let cave = VirtualAlloc(None, GUARD_CAVE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if cave.is_null() {
-        log_error("mod-fundacion: VirtualAlloc cave guard devolvio NULL");
-        return false;
-    }
-    let cave_addr = cave as u32;
-    let p = cave as *mut u8;
-
-    let helper = p3esp_tick_guard as usize as u32;
-    let rel_call = helper.wrapping_sub(cave_addr + 2 + 5); // call en offset 2
-    let mut i = 0usize;
-    let put = |p: *mut u8, i: &mut usize, bytes: &[u8]| unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.add(*i), bytes.len());
-        *i += bytes.len();
-    };
-    put(p, &mut i, &[0x9C]); // pushfd
-    put(p, &mut i, &[0x60]); // pushad
-    put(p, &mut i, &[0xE8]); // call rel32 (offset 2)
-    put(p, &mut i, &rel_call.to_le_bytes());
-    put(p, &mut i, &[0x61]); // popad
-    put(p, &mut i, &[0x9D]); // popfd
-    put(p, &mut i, &[0xA1, 0x9C, 0x29, 0x70, 0x00]); // mov eax,[0x70299C]
-    let rel_jmp = GUARD_HOOK_CONT.wrapping_sub(cave_addr + i as u32 + 5);
-    put(p, &mut i, &[0xE9]); // jmp rel32 (offset 14)
-    put(p, &mut i, &rel_jmp.to_le_bytes());
-    if i != GUARD_CAVE_SIZE {
-        log_error("mod-fundacion: tamano de cave guard desajustado (bug interno)");
-        return false;
-    }
-
-    let mut old = PAGE_PROTECTION_FLAGS(0);
-    if !VirtualProtect(cave as _, GUARD_CAVE_SIZE, PAGE_EXECUTE_READ, &mut old).as_bool() {
-        log_error("mod-fundacion: VirtualProtect cave guard fallo");
-        return false;
-    }
-    let patch = (IMAGE_BASE + GUARD_HOOK_RVA) as *mut u8;
-    let rel = cave_addr.wrapping_sub(IMAGE_BASE + GUARD_HOOK_RVA + 5);
-    if !VirtualProtect(patch as _, 5, PAGE_EXECUTE_READWRITE, &mut old).as_bool() {
-        log_error("mod-fundacion: VirtualProtect patch guard fallo");
-        return false;
-    }
-    *patch = 0xE9;
-    std::ptr::write_unaligned(patch.add(1) as *mut u32, rel);
-    if !VirtualProtect(patch as _, 5, old, &mut old).as_bool() {
-        log_error("mod-fundacion: restaurar proteccion patch guard fallo");
-        return false;
-    }
-    true
-}
-
 // ---------- start() (contrato del modloader) -----------
 
 static STARTED: Once = Once::new();
@@ -697,21 +532,6 @@ pub unsafe extern "C" fn start() -> u32 {
                 "mod-fundacion: hook de ciudad NO instalado; \
                  la clave ciudad no tendra efecto",
             );
-        }
-
-        // ---- refresco=auto: recalculo al cambiar el cfg ----
-        if cfg_refresco_auto() {
-            if apply_hook_guard() {
-                log_info(
-                    "mod-fundacion: refresco=auto; cambios en [fundacion] \
-                     recalculan la mision al instante",
-                );
-            } else {
-                log_error(
-                    "mod-fundacion: hook de refresco NO instalado; \
-                     los cambios de cfg NO forzaran recalculo",
-                );
-            }
         }
     });
     ok as u32

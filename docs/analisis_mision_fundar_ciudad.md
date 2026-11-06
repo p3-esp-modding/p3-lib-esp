@@ -201,8 +201,7 @@ log salte de mes en mes.
 El generador solo corre en el tick diario (`0x004F8CAD`) si `ds:0x70299C == 0`
 (sin misión de almirantazgo activa/pendiente). Ese guard — no la fecha — es el
 "freno": mientras sea ≠0 no se generan nuevas ofertas (hasta que la aceptada
-se cumpla, caduque o fracase). Con `refresco=auto` (mod-fundacion) un hook en
-`0x004F8C9F` resetea el guard cuando cambia el cfg, forzando el recálculo.
+se cumpla, caduque o fracase).
 
 ### El mod y la lección stdcall
 

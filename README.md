@@ -59,7 +59,7 @@ juego). Si algo falla al arrancar, míralo ahí primero.
 | `mod_limite_ciudades.dll` | La misión del gobernador permite fundar hasta 36 ciudades (antes 26). |
 | `mod_mendigos_taberna.dll` | La taberna acepta hasta 100 marineros (antes 50). |
 | `mod_satisfaccion_mendigos.dll` | Ajusta la satisfacción de los mendigos (4 → 3). |
-| `mod_fundacion.dll` | Ciudad fundada: corrige los 3 productos más escasos (antes salían mal por un error del juego) y opcionalmente da 4 productos, una lista personalizada, ciudad preferida para la misión y recálculo al cambiar la config. Ver `[fundacion]` abajo. |
+| `mod_fundacion.dll` | Ciudad fundada: corrige los 3 productos más escasos (antes salían mal por un error del juego) y opcionalmente da 4 productos, una lista personalizada o una ciudad preferida para la misión. Ver `[fundacion]` abajo. |
 | `mod_catedral_crash.dll` | Corrige el crash al abrir la catedral tras recargar partida (tabla de texturas no reinicializada). |
 
 ## Configuración
@@ -78,11 +78,8 @@ productos=grano,madera,cerveza,vino,miel
 
 # Ciudad preferida para la misión de fundar (lista en orden; se usa la
 # primera que no esté fundada, si no la que calcula el juego):
-#ciudad=memel,windau,konigsberg
-
-# refresco=auto  los cambios en [fundacion] recalculan la misión al instante
-# refresco=defecto (o ausente) el juego gestiona el ciclo como siempre
-refresco=defecto
+ciudad=defecto
+# ciudad=memel,windau,konigsberg
 ```
 
 Productos válidos para `modo=3`: grano, madera, cerveza, vino, miel, pescado,
@@ -90,18 +87,9 @@ carne, cuero, pieles, tela, sal, hierro, herramientas, lana, brea, cáñamo,
 alfarería, ladrillos, aceite. Nota: carne y cuero comparten fábrica; poner los
 dos cuenta como uno.
 
-## Nota para desarrolladores
+## Problemas
 
-- Ramas: `main` (desarrollo, la única local), `pre-release` y `stable`
-  (solo en el remoto). Para publicar: `./subir-pre-release.sh` (build de
-  prueba) o `./subir-stable.sh` (release estable); ambos empujan `main` a la
-  rama correspondiente y disparan GitHub Actions, que compila y actualiza el
-  release homónimo.
-- Compilación local en Windows: `deploy.bat` (MSVC,
-  `i686-pc-windows-msvc`) genera `output\`.
-- Tras tocar cualquier cave o parche, ejecutar `python3 verificar_mods.py
-  Patrician3.exe`: reconstruye los bytes de cada cave, los desensambla con
-  objdump y comprueba los parches contra el exe original.
-- Detalles técnicos (direcciones del exe español, análisis de misiones):
-  `docs/DIRECCIONES_EXE_ESPANOL.md`, `docs/analisis_mision_fundar_ciudad.md`
-  y `AGENTS.md`.
+Si algo no funciona, revisa `Patrician3_modloader.log` en la carpeta del
+juego. Para dudas o fallos, abre una incidencia en el repositorio.
+
+Si desarrollas mods, consulta [`docs/DESARROLLO.md`](docs/DESARROLLO.md).

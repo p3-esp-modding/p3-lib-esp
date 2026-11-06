@@ -329,8 +329,6 @@ def main():
     for name, off, expected_hex in [
         # epilogo del generador de misiones (hook de ciudad preferida)
         ("epilogo misiones 0x005341B4", 0x001341B4, "8D4C244C6A"),
-        # tick diario: mov eax,[0x70299C] (hook de refresco=auto)
-        ("guard tick 0x004F8C9F", 0x000F8C9F, "A19C297000"),
         # epilogo de FUN_005343f0 (hook de modo=3)
         ("epilogo escasez 0x0053478A", 0x0013478A, "5F5E5D5B81"),
     ]:
